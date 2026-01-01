@@ -24,12 +24,20 @@ for (let oct = 1; oct <= 8; oct++) {
     });
 }
 
+for (let oct = 1; oct <= 8; oct++) {
+    NOTES.forEach((note, i) => {
+        const label = `${note}${oct}`;
+        FREQS[label] = 440 * Math.pow(2, ((oct * 12 + i) - 57) / 12);
+    });
+}
+
 export const CHROMATIC_LABELS: string[] = [];
 for (let oct = 8; oct >= 1; oct--) {
-    for (let i = 11; i >= 0; i--) {
+    for (let i = NOTES.length - 1; i >= 0; i--) {
         CHROMATIC_LABELS.push(`${NOTES[i]}${oct}`);
     }
 }
+
 
 const SCALE_INTERVALS: Record<string, number[]> = {
     'Maj Pent': [0, 2, 4, 7, 9],
@@ -80,4 +88,42 @@ export const DEFAULT_SOUND_CONFIG = {
     kick: { freq: 150, decay: 0.4 },
     snare: { freq: 1200, decay: 0.15, mix: 0.5 },
     hat: { freq: 8000, decay: 0.04 }
+};
+
+export const generateBlankGrid = (rows: number) => {
+    return Array(rows).fill(null).map(() => Array(STEPS_PER_PATTERN).fill(null));
+};
+
+export const getLabelSemitones = (label: string): number => {
+    const match = label.match(/^([A-G]#?|Ab|Bb|Db|Eb|Gb)(\d)$/);
+    if (!match) return 0;
+    const note = match[1];
+    const octave = parseInt(match[2]);
+    return (octave - 3) * 12 + (NOTE_TO_SEMI[note] || 0);
+};
+
+export const getRowConfigs = (scaleName: string, unrolled: boolean) => {
+    let labels: string[];
+    if (unrolled) {
+        labels = CHROMATIC_LABELS;
+    } else {
+        // Scaled view: Filter SCALES to only include Octave 4
+        const scale = SCALES[scaleName] || SCALES['C Maj Pent'] || { labels: [] };
+        labels = scale.labels.filter(l => l.endsWith('4'));
+
+        // Safety check: if no Octave 4 notes, just use the first 8 labels from the scale
+        if (labels.length === 0 && scale.labels.length > 0) {
+            labels = scale.labels.slice(0, 8);
+        }
+    }
+
+    const synthRows = labels.map((label: string) => ({
+        label,
+        color: label.includes('#') ? 'bg-slate-900/40' : 'bg-sky-500/5',
+        activeColor: 'bg-sky-500',
+        freq: FREQS[label] || 261.63,
+        gain: 0.8,
+        type: 'synth' as const
+    }));
+    return [...synthRows, ...DEFAULT_DRUM_ROWS];
 };

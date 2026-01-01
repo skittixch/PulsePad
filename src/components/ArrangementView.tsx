@@ -1,15 +1,14 @@
 import React from 'react';
-import type { Grid, RowConfig } from '../types';
-import { STEPS_PER_PATTERN } from '../constants';
+import type { RowConfig, Track, TrackPart } from '../types';
+import { STEPS_PER_PATTERN, getRowConfigs } from '../constants';
 
 interface ArrangementViewProps {
-    song: Grid[][];
+    tracks: Track[];
     editingTrackIndex: number;
     editingPatternIndex: number;
     playbackPatternIndex: number;
     queuedPatternIndex: number;
     trackLoops: (number[] | null)[];
-    rowConfigs: RowConfig[];
     onSelectPattern: (trackIndex: number, patternIndex: number) => void;
     onInsertPattern: (index: number) => void;
     onDeletePattern: (index: number) => void;
@@ -22,16 +21,17 @@ interface ArrangementViewProps {
     onToggleFollow: (val: boolean) => void;
     bpm: number;
     playbackStep: number;
+    isPerformanceMode: boolean;
+    onSetPerformanceMode: (val: boolean) => void;
 }
 
 export const ArrangementView: React.FC<ArrangementViewProps> = ({
-    song,
+    tracks,
     editingTrackIndex,
     editingPatternIndex,
     playbackPatternIndex,
     queuedPatternIndex,
     trackLoops,
-    rowConfigs,
     onSelectPattern,
     onInsertPattern,
     onDeletePattern,
@@ -44,6 +44,8 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
     onToggleFollow,
     bpm,
     playbackStep,
+    isPerformanceMode,
+    onSetPerformanceMode,
 }) => {
     const formatTime = (seconds: number) => {
         const mins = Math.floor(seconds / 60);
@@ -51,20 +53,33 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
         return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
-    const totalSeconds = song[0].length * STEPS_PER_PATTERN * (60.0 / bpm / 4);
+    const maxLength = Math.max(...tracks.map(t => t.parts.length), 1);
+    const totalSeconds = maxLength * STEPS_PER_PATTERN * (60.0 / bpm / 4);
     const currentSeconds = (playbackPatternIndex * STEPS_PER_PATTERN + playbackStep) * (60.0 / bpm / 4);
 
     return (
         <div className="w-full h-full bg-slate-900/40 rounded-2xl border border-slate-800/60 p-0.5 flex flex-col backdrop-blur-xl shrink-0 overflow-hidden">
             <div className="p-2 px-4 border-b border-slate-800/60 flex justify-between items-center shrink-0">
-                <h3 className="text-slate-400 uppercase tracking-[0.2em] text-[10px] font-black flex items-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
-                        stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="12" cy="12" r="10" />
-                        <polygon points="10 8 16 12 10 16 10 8" />
-                    </svg>
-                    Arrangement View
-                </h3>
+                <div className="flex items-center gap-4">
+                    <h3 className="text-slate-400 uppercase tracking-[0.2em] text-[10px] font-black flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="12" cy="12" r="10" />
+                            <polygon points="10 8 16 12 10 16 10 8" />
+                        </svg>
+                        Arrangement
+                    </h3>
+
+                    <button
+                        onClick={() => onSetPerformanceMode(!isPerformanceMode)}
+                        className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest transition-all border ${isPerformanceMode
+                            ? 'bg-rose-500 border-rose-400 text-white shadow-[0_0_15px_rgba(244,63,94,0.3)]'
+                            : 'bg-slate-800 border-slate-700 text-slate-500 hover:text-white'
+                            }`}
+                    >
+                        Performance Mode {isPerformanceMode ? 'ON' : 'OFF'}
+                    </button>
+                </div>
 
                 <div className="flex items-center gap-6">
                     <label className="flex items-center gap-2 cursor-pointer group select-none">
@@ -87,19 +102,25 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
             </div>
 
             <div className="flex-1 overflow-y-auto">
-                {song.map((track, tIdx) => (
-                    <div key={tIdx} className="flex items-center p-1 border-b border-white/5 last:border-0 min-w-max hover:bg-white/[0.02] transition-colors">
+                {tracks.map((track, tIdx) => (
+                    <div key={track.id} className="flex items-center p-1 border-b border-white/5 last:border-0 min-w-max hover:bg-white/[0.02] transition-colors relative">
                         {/* Track Header */}
-                        <div className={`w-14 shrink-0 flex flex-col justify-start pt-2 pr-2 border-r border-slate-800 mr-1 ${tIdx === editingTrackIndex ? 'opacity-100' : 'opacity-40 hover:opacity-100 transition-opacity'}`}>
-                            <span className={`text-[10px] font-black uppercase tracking-tighter ${tIdx === editingTrackIndex ? 'text-sky-400' : 'text-slate-500'}`}>
-                                Trk {tIdx + 1}
-                            </span>
+                        <div className={`w-28 shrink-0 flex flex-col justify-start p-2 border-r border-slate-800 mr-1 ${tIdx === editingTrackIndex ? 'opacity-100' : 'opacity-60 hover:opacity-100 transition-opacity'}`}>
+                            <div className="flex justify-between items-center mb-1">
+                                <span className={`text-[10px] font-black uppercase tracking-tighter ${tIdx === editingTrackIndex ? 'text-sky-400' : 'text-slate-500'}`}>
+                                    {track.name}
+                                </span>
+                                <div className="flex gap-1">
+                                    <button className={`w-4 h-4 rounded text-[8px] font-bold flex items-center justify-center border ${track.muted ? 'bg-rose-500 border-rose-400 text-white' : 'bg-slate-800 border-slate-700 text-slate-500'}`}>M</button>
+                                    <button className={`w-4 h-4 rounded text-[8px] font-bold flex items-center justify-center border ${track.soloed ? 'bg-amber-500 border-amber-400 text-white' : 'bg-slate-800 border-slate-700 text-slate-500'}`}>S</button>
+                                </div>
+                            </div>
                             <div className={`h-[1px] w-full mt-1.5 rounded-full ${tIdx === editingTrackIndex ? 'bg-sky-500/50' : 'bg-slate-800'}`} />
                         </div>
 
-                        {/* Patterns */}
+                        {/* Parts */}
                         <div className="flex items-center">
-                            {track.map((pattern, pIdx) => {
+                            {track.parts.map((part, pIdx) => {
                                 const isEditing = tIdx === editingTrackIndex && pIdx === editingPatternIndex;
                                 const isPlayingPattern = isPlaying && pIdx === playbackPatternIndex;
                                 const isQueued = pIdx === queuedPatternIndex;
@@ -109,30 +130,18 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                 const isLoopStart = myLoop && pIdx === myLoop[0];
                                 const isLoopEnd = myLoop && pIdx === myLoop[1];
 
+                                const configs = getRowConfigs(part.scale, false);
+
                                 return (
                                     <React.Fragment key={pIdx}>
-                                        {/* Inserter */}
                                         <div
-                                            className="group relative flex items-center justify-center w-4 h-14 cursor-pointer transition-all shrink-0 -mx-2 z-20"
-                                            onClick={() => onInsertPattern(pIdx)}
-                                        >
-                                            <div className="w-[1px] h-full bg-white/5 group-hover:bg-sky-500/50 transition-colors" />
-                                            {tIdx === 0 && (
-                                                <div className="absolute w-4 h-4 bg-slate-900 rounded-full border border-slate-700 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all shadow-xl z-30">
-                                                    <span className="text-sky-500 text-[10px] font-bold">+</span>
-                                                </div>
-                                            )}
-                                        </div>
-
-                                        <div
-                                            className={`relative flex flex-col justify-between p-1.5 border transition-all cursor-pointer w-40 h-14 shrink-0 group overflow-hidden
+                                            className={`relative flex flex-col justify-between p-1.5 border transition-all cursor-pointer w-44 h-16 shrink-0 group overflow-hidden mr-1 mt-1 mb-1
                                                 ${isEditing ? 'border-sky-500 bg-sky-500/10 shadow-[0_0_15px_rgba(14,165,233,0.1)] z-10' : 'border-white/10 bg-slate-950/40 hover:border-white/20'}
                                                 ${isInLoop ? 'border-amber-500/50 bg-amber-500/5 z-10' : ''}
                                                 ${isLoopStart ? 'border-l-amber-500' : ''}
                                                 ${isLoopEnd ? 'border-r-amber-500' : ''}
                                                 ${isQueued ? 'border-violet-500/50 shadow-[0_0_10px_rgba(167,139,250,0.1)] z-10' : ''}
-                                                ${pIdx === 0 ? 'rounded-l-xl' : ''}
-                                                ${pIdx === track.length - 1 ? 'rounded-r-xl' : ''}
+                                                rounded-xl
                                             `}
                                             onClick={(e) => {
                                                 if (e.shiftKey) {
@@ -149,28 +158,29 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                                 onTrackLoopChange(tIdx, isInLoop ? null : [pIdx, pIdx]);
                                             }}
                                         >
-                                            <div className="flex justify-between items-start leading-none">
-                                                <span className={`text-[8px] font-black uppercase tracking-tighter ${isEditing ? 'text-sky-400' : 'text-slate-500'}`}>
-                                                    Part {pIdx + 1}
-                                                </span>
-                                                {tIdx === 0 && (
-                                                    <button
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            onDeletePattern(pIdx);
-                                                        }}
-                                                        className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-slate-800 rounded text-slate-500 hover:text-rose-500 transition-all font-bold text-[10px]"
-                                                    >
-                                                        ×
-                                                    </button>
-                                                )}
+                                            <div className="flex justify-between items-start leading-none mb-1">
+                                                <div className="flex flex-col">
+                                                    <span className={`text-[8px] font-black uppercase tracking-tighter ${isEditing ? 'text-sky-400' : 'text-slate-500'}`}>
+                                                        Part {pIdx + 1}
+                                                    </span>
+                                                    <span className="text-[6px] text-slate-600 font-bold uppercase">{part.scale}</span>
+                                                </div>
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        onDeletePattern(pIdx);
+                                                    }}
+                                                    className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-slate-800 rounded text-slate-500 hover:text-rose-500 transition-all font-bold text-[10px]"
+                                                >
+                                                    ×
+                                                </button>
                                             </div>
 
-                                            <div className="relative h-6 w-full mt-1 bg-black/20 rounded-md overflow-hidden border border-white/5">
-                                                {pattern.map((row, r) =>
+                                            <div className="relative h-7 w-full bg-black/40 rounded-lg overflow-hidden border border-white/5 pointer-events-none">
+                                                {part.grid.map((row, r) =>
                                                     row.map((note, c) => {
                                                         if (!note) return null;
-                                                        const rowHeight = 100 / rowConfigs.length;
+                                                        const rowHeight = 100 / configs.length;
                                                         const stepWidth = 100 / STEPS_PER_PATTERN;
 
                                                         const getColor = (colorClass: string) => {
@@ -181,7 +191,7 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                                             return '#64748b';
                                                         };
 
-                                                        const baseColor = (note.rgb || (rowConfigs[r] ? getColor(rowConfigs[r].activeColor) : '#64748b'));
+                                                        const baseColor = (note.rgb || (configs[r] ? getColor(configs[r].activeColor) : '#64748b'));
 
                                                         return (
                                                             <div
@@ -193,18 +203,12 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                                                     width: `${note.d * stepWidth}%`,
                                                                     height: `${rowHeight}%`,
                                                                     backgroundColor: baseColor,
-                                                                    opacity: 0.6
+                                                                    opacity: 0.8
                                                                 }}
                                                             />
                                                         );
                                                     })
                                                 )}
-                                            </div>
-
-                                            <div className="flex gap-1 mt-0.5">
-                                                {isPlayingPattern && <div className="bg-emerald-500 text-white text-[6px] font-black px-1 py-0.5 rounded animate-pulse">PLAYING</div>}
-                                                {isQueued && <div className="bg-violet-500 text-white text-[6px] font-black px-1 py-0.5 rounded">NEXT</div>}
-                                                {isInLoop && <div className="bg-amber-500 text-slate-900 text-[6px] font-black px-1 py-0.5 rounded">LOOP</div>}
                                             </div>
 
                                             {isPlayingPattern && (
@@ -218,25 +222,22 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                 );
                             })}
 
-                            {/* End Inserters (Only in first track or header) */}
-                            {tIdx === 0 && (
-                                <div className="flex flex-col gap-1 w-10 h-14 shrink-0 opacity-40 hover:opacity-100 transition-all ml-4">
-                                    <button
-                                        onClick={() => onInsertPattern(song[0].length)}
-                                        className="flex-1 flex items-center justify-center bg-slate-950 border border-white/10 rounded-lg hover:bg-slate-800 hover:text-sky-400 transition-all"
-                                        title="Add Empty Slot"
-                                    >
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14m-7-7v14" /></svg>
-                                    </button>
-                                    <button
-                                        onClick={() => onDuplicatePattern(song[0].length - 1)}
-                                        className="flex-1 flex items-center justify-center bg-slate-950 border border-white/10 rounded-lg hover:bg-slate-800 hover:text-sky-400 transition-all"
-                                        title="Duplicate All Tracks at Last Slot"
-                                    >
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
-                                    </button>
-                                </div>
-                            )}
+                            <div className="flex gap-2 ml-4">
+                                <button
+                                    onClick={() => onInsertPattern(track.parts.length)}
+                                    className="w-10 h-10 flex items-center justify-center bg-slate-950/40 border border-white/10 rounded-xl hover:bg-slate-800 hover:text-sky-400 transition-all text-slate-600"
+                                    title="Add Empty Part"
+                                >
+                                    <span className="text-lg font-bold">+</span>
+                                </button>
+                                <button
+                                    onClick={() => onDuplicatePattern(track.parts.length - 1)}
+                                    className="w-10 h-10 flex items-center justify-center bg-slate-950/40 border border-white/10 rounded-xl hover:bg-slate-800 hover:text-sky-400 transition-all text-slate-600"
+                                    title="Duplicate Last Part"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 ))}
@@ -250,7 +251,7 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                         <div className="w-6 h-6 rounded-full bg-sky-500/10 border border-sky-500/20 flex items-center justify-center group-hover:scale-110 transition-transform">
                             <span className="text-sky-500 font-bold">+</span>
                         </div>
-                        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 group-hover:text-sky-400 transition-colors">Add Layer Track</span>
+                        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 group-hover:text-sky-400 transition-colors">New Layer Track</span>
                     </button>
                 </div>
             </div>

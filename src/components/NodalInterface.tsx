@@ -446,8 +446,12 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
             // DELETE
             if (e.key === 'Delete' || e.key === 'Backspace') {
                 if (selectedNodeIds.size > 0) {
-                    const newNodes = graph.nodes.filter(n => !selectedNodeIds.has(n.id));
-                    const newConnections = graph.connections.filter(c => !selectedNodeIds.has(c.source) && !selectedNodeIds.has(c.target));
+                    const protectedIds = new Set(['src', 'out']);
+                    const newNodes = graph.nodes.filter(n => !selectedNodeIds.has(n.id) || protectedIds.has(n.id));
+                    const newConnections = graph.connections.filter(c =>
+                        (!selectedNodeIds.has(c.source) || protectedIds.has(c.source)) &&
+                        (!selectedNodeIds.has(c.target) || protectedIds.has(c.target))
+                    );
                     onCommitGraph({ ...graph, nodes: newNodes, connections: newConnections });
                     setSelectedNodeIds(new Set());
                 }
@@ -464,8 +468,12 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
                     const nodesToCopy = graph.nodes.filter(n => selectedNodeIds.has(n.id));
                     if (nodesToCopy.length > 0) {
                         setClipboard(nodesToCopy);
-                        const newNodes = graph.nodes.filter(n => !selectedNodeIds.has(n.id));
-                        const newConnections = graph.connections.filter(c => !selectedNodeIds.has(c.source) && !selectedNodeIds.has(c.target));
+                        const protectedIds = new Set(['src', 'out']);
+                        const newNodes = graph.nodes.filter(n => !selectedNodeIds.has(n.id) || protectedIds.has(n.id));
+                        const newConnections = graph.connections.filter(c =>
+                            (!selectedNodeIds.has(c.source) || protectedIds.has(c.source)) &&
+                            (!selectedNodeIds.has(c.target) || protectedIds.has(c.target))
+                        );
                         onCommitGraph({ ...graph, nodes: newNodes, connections: newConnections });
                         setSelectedNodeIds(new Set());
                     }

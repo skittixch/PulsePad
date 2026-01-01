@@ -178,7 +178,7 @@ export class AudioEngine {
         osc.stop(time + durationSecs + release + 0.1);
     }
 
-    playStep(grid: Grid, stepIndex: number, time: number, configs: RowConfig[], bpm: number) {
+    playStep(grid: Grid, stepIndex: number, time: number, configs: RowConfig[], bpm: number, trackGain: number = 1.0) {
         if (!this.ctx) return;
 
         let totalR = 0, totalG = 0, totalB = 0, count = 0;
@@ -187,16 +187,17 @@ export class AudioEngine {
             const note = row[stepIndex];
             if (note) {
                 const config = configs[rowIndex];
+                const finalGain = (config.gain ?? 0.8) * trackGain;
                 const freq = config.type === 'synth' ? config.freq * Math.pow(2, note.oct || 0) : config.freq;
 
                 if (config.type === 'synth') {
-                    this.createSynth(freq, time, note.d, bpm, config.gain);
+                    this.createSynth(freq, time, note.d, bpm, finalGain);
                 } else if (config.type === 'kick') {
-                    this.createKick(time, config.gain);
+                    this.createKick(time, finalGain);
                 } else if (config.type === 'snare') {
-                    this.createSnare(time, config.gain);
+                    this.createSnare(time, finalGain);
                 } else if (config.type === 'hat') {
-                    this.createHiHat(time, config.gain);
+                    this.createHiHat(time, finalGain);
                 }
 
                 // Color tracking

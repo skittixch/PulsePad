@@ -4,105 +4,57 @@ import { ArrangementView } from './components/ArrangementView';
 import { SpreadsheetView } from './components/SpreadsheetView';
 import { NodalInterface } from './components/NodalInterface';
 import { ScalePieMenu } from './components/ScalePieMenu';
-import type { Note, RowConfig, Grid, FXGraph } from './types';
-import { STEPS_PER_PATTERN, SCALES, FREQS, DEFAULT_DRUM_ROWS, PRESETS, CHROMATIC_LABELS, NOTE_TO_SEMI } from './constants';
+import type { Note, RowConfig, Grid, FXGraph, Track, TrackPart } from './types';
+import { STEPS_PER_PATTERN, SCALES, DEFAULT_DRUM_ROWS, PRESETS, generateBlankGrid, getLabelSemitones, getRowConfigs } from './constants';
 import { audioEngine } from './audioEngine';
 
-const generateBlankGrid = (rows: number) => {
-  return Array(rows).fill(null).map(() => Array(STEPS_PER_PATTERN).fill(null));
-};
 
 
-
-const getLabelSemitones = (label: string): number => {
-  const match = label.match(/^([A-G]#?|Ab|Bb|Db|Eb|Gb)(\d)$/);
-  if (!match) return 0;
-  const note = match[1];
-  const octave = parseInt(match[2]);
-  return (octave - 3) * 12 + (NOTE_TO_SEMI[note] || 0);
-};
-
-const getRowConfigs = (scaleName: string, unrolled: boolean): RowConfig[] => {
-  let labels: string[];
-  if (unrolled) {
-    labels = CHROMATIC_LABELS;
-  } else {
-    // Scaled view: Filter SCALES to only include Octave 4
-    const scaleLabels = SCALES[scaleName]?.labels || SCALES['C Maj Pent'].labels;
-    labels = scaleLabels.filter(l => l.endsWith('4'));
-
-    // If user specifically wants 8 rows and we have fewer (like 5), 
-    // we just return what the scale provides. 
-    // The user said "8 rows and 16 columns", but C Maj Pent is 5 notes.
-    // We'll stick to the "Octave 4" constraint as requested.
-  }
-
-  const synthRows = labels.map((label: string) => ({
-    label,
-    color: label.includes('#') ? 'bg-slate-900/40' : 'bg-sky-500/5',
-    activeColor: 'bg-sky-500',
-    freq: FREQS[label] || 261.63,
-    gain: 0.8,
-    type: 'synth' as const
-  }));
-  return [...synthRows, ...DEFAULT_DRUM_ROWS];
-};
-
-const remapGrid = (grid: Grid, sourceConfigs: RowConfig[], targetConfigs: RowConfig[], targetUnrolled: boolean): Grid => {
+const remapGrid = (sourcePart: TrackPart, targetScaleName: string, targetUnrolled: boolean, sourceUnrolled: boolean): Grid => {
+  const sourceConfigs = getRowConfigs(sourcePart.scale, sourceUnrolled);
+  const targetConfigs = getRowConfigs(targetScaleName, targetUnrolled);
   const newGrid = generateBlankGrid(targetConfigs.length);
 
-  grid.forEach((row, r) => {
-    const config = sourceConfigs[r];
-    if (!config) return;
-
-    if (config.type !== 'synth') {
-      // ABSOLUTE DRUM PROTECTION: Match by Label + Type
-      // We skip drums here because they are handled in a separate pass now
-      return;
-    }
-
+  sourcePart.grid.forEach((row, r) => {
     row.forEach((note, c) => {
       if (!note) return;
-      const absPitch = getLabelSemitones(config.label) + (note.oct || 0) * 12;
+      const sourceLabel = sourceConfigs[r]?.label;
+      if (!sourceLabel) return;
 
-      let bestRow = -1;
-      let bestOct = 0;
+      const isDrum = sourceConfigs[r].type && sourceConfigs[r].type !== 'synth';
+      if (isDrum) {
+        // Find matching drum in target
+        const targetR = targetConfigs.findIndex(cfg => cfg.type === sourceConfigs[r].type && cfg.label === sourceLabel);
+        if (targetR !== -1) newGrid[targetR][c] = note;
+        return;
+      }
+
+      // Synth note mapping
+      const semi = getLabelSemitones(sourceLabel) + (note.oct || 0) * 12;
+      let bestR = -1;
       let minDiff = Infinity;
+      let bestOct = 0;
 
-      targetConfigs.forEach((tc, tcIdx) => {
-        if (tc.type !== 'synth') return;
-        const tcBase = getLabelSemitones(tc.label);
-        const oct = Math.round((absPitch - tcBase) / 12);
-        const actual = tcBase + oct * 12;
-        const d = Math.abs(actual - absPitch);
+      targetConfigs.forEach((tCfg, tr) => {
+        if (tCfg.type !== 'synth') return;
+        const targetSemiBase = getLabelSemitones(tCfg.label);
+        const octDiff = Math.round((semi - targetSemiBase) / 12);
+        const diff = Math.abs(semi - (targetSemiBase + octDiff * 12));
 
-        // Priority: 1. Min distance, 2. Min absolute octave (stay on matching label if possible)
-        if (d < minDiff || (d === minDiff && Math.abs(oct) < Math.abs(bestOct))) {
-          minDiff = d;
-          bestRow = tcIdx;
-          bestOct = oct;
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestR = tr;
+          bestOct = octDiff;
+        } else if (diff === minDiff && Math.abs(octDiff) < Math.abs(bestOct)) {
+          bestR = tr;
+          bestOct = octDiff;
         }
       });
 
-      if (bestRow !== -1) {
-        newGrid[bestRow][c] = { ...note, oct: targetUnrolled ? bestOct : 0 };
+      if (bestR !== -1) {
+        newGrid[bestR][c] = { ...note, oct: targetUnrolled ? bestOct : 0 };
       }
     });
-  });
-
-  // DRUM ISOLATION PASS: Copy drums exactly to their destination rows
-  sourceConfigs.forEach((config, r) => {
-    if (config.type !== 'synth') {
-      const targetDrumIdx = targetConfigs.findIndex(c => c.type === config.type && c.label === config.label);
-      console.log(`[DRUM DEBUG] Source ${config.label} (Row ${r}) -> Target Index ${targetDrumIdx} | Source Data Exists: ${!!grid[r]}`);
-
-      if (targetDrumIdx !== -1 && grid[r]) {
-        if (newGrid[targetDrumIdx]?.some(n => n !== null)) {
-          console.warn(`[DRUM DEBUG] WARNING: Overwriting existing data at Target ${targetDrumIdx} (Length: ${newGrid[targetDrumIdx]?.length})`);
-        }
-        newGrid[targetDrumIdx] = [...grid[r]];
-      }
-    }
   });
 
   return newGrid;
@@ -125,23 +77,7 @@ const App: React.FC = () => {
   const [bpm, setBpm] = useState(120);
   const [editingTrackIndex, setEditingTrackIndex] = useState(0);
   const [editingPatternIndex, setEditingPatternIndex] = useState(0);
-  const [patternScales, setPatternScales] = useState<string[][]>(() => {
-    const saved = localStorage.getItem('pulse_pattern_scales');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          // Migration: If it's a 1D array of strings, it's old global pattern scales for track 0
-          if (typeof parsed[0] === 'string') return [parsed];
-          return parsed;
-        }
-      } catch (e) {
-        console.warn("Failed to parse patternScales, resetting:", e);
-      }
-    }
-    return [['C Maj Pent']];
-  });
-  const currentScale = patternScales[editingTrackIndex]?.[editingPatternIndex] || 'C Maj Pent';
+  const [isPerformanceMode, setIsPerformanceMode] = useState(false);
   const [playbackStep, setPlaybackStep] = useState(0);
   const [playbackPatternIndex, setPlaybackPatternIndex] = useState(0);
   const [sequencerScrollTop, setSequencerScrollTop] = useState(0);
@@ -153,80 +89,92 @@ const App: React.FC = () => {
   const [masterVolume] = useState(0.8);
   const [toast, setToast] = useState<{ visible: boolean; message: string }>({ visible: false, message: '' });
   const [snap] = useState<1 | 2 | 4>(1);
-  const [isArrOpen, setIsArrOpen] = useState(window.innerHeight > 750);
-  // Layout state
-  const [history, setHistory] = useState<{ song: Grid[][], fxGraph: FXGraph, patternScales: string[][] }[]>([]);
-  const [redoStack, setRedoStack] = useState<{ song: Grid[][], fxGraph: FXGraph, patternScales: string[][] }[]>([]);
-  // Layout state
+  const [isArrOpen, setIsArrOpen] = useState(true);
   const [arrHeight, setArrHeight] = useState(180);
   const [isResizingArr, setIsResizingArr] = useState(false);
   const [resetArmed, setResetArmed] = useState(false);
   const [selectedNotes, setSelectedNotes] = useState<{ r: number, c: number }[]>([]);
   const [clipboard, setClipboard] = useState<{ r: number, c: number, note: Note }[] | null>(null);
 
-  // FX state
   const [fxGraph, setFxGraph] = useState<FXGraph>(() => {
     const saved = localStorage.getItem('pulse_fx_graph');
     return saved ? JSON.parse(saved) : initialFXGraph;
   });
   const [lastCommittedGraph, setLastCommittedGraph] = useState<FXGraph>(fxGraph);
 
+  const [tracks, setTracks] = useState<Track[]>(() => {
+    const savedSong = localStorage.getItem('pulse_song');
+    const savedScales = localStorage.getItem('pulse_pattern_scales');
 
-  // Audio state
-  const [song, setSong] = useState<Grid[][]>(() => {
-    const saved = localStorage.getItem('pulse_song');
-    if (saved) {
+    if (savedSong) {
       try {
-        let parsed = JSON.parse(saved);
-        if (!Array.isArray(parsed)) throw new Error("Invalid song format");
+        let parsedSong = JSON.parse(savedSong);
+        let parsedScales = savedScales ? JSON.parse(savedScales) : [];
 
-        // Level 1: Ensure it's 2D (Tracks -> Patterns -> Grid)
-        // If it's 1D (Patterns -> Grid), wrap it in one track
-        // We check if parsed[0][0][0] is an array. If not, it's 1D.
-        if (parsed.length > 0 && Array.isArray(parsed[0]) && Array.isArray(parsed[0][0]) && !Array.isArray(parsed[0][0][0])) {
-          parsed = [parsed];
+        if (parsedSong.length > 0 && Array.isArray(parsedSong[0]) && Array.isArray(parsedSong[0][0]) && !Array.isArray(parsedSong[0][0][0])) {
+          parsedSong = [parsedSong];
         }
 
-        // Level 2: Fix any corruption where a track might have been flattened to a Grid
-        // (Due to the old bugged handleRemix)
-        if (Array.isArray(parsed)) {
-          parsed = parsed.map(track => {
-            if (Array.isArray(track) && track.length > 0 && !Array.isArray(track[0][0])) {
-              // This "track" is actually a single Grid. Wrap it back.
-              return [track];
-            }
-            return track;
-          });
-        }
-
-        return parsed as Grid[][];
+        return parsedSong.map((gridArray: Grid[], tIdx: number) => ({
+          id: `track-${tIdx}-${Math.random().toString(36).substr(2, 9)}`,
+          name: `Track ${tIdx + 1}`,
+          parts: gridArray.map((grid, pIdx) => ({
+            grid,
+            scale: (parsedScales[tIdx]?.[pIdx]) || 'C Maj Pent'
+          })),
+          isLooping: true,
+          volume: 1.0,
+          muted: false,
+          soloed: false
+        }));
       } catch (e) {
-        console.warn("Song Load Failed, resetting:", e);
+        console.warn("Migration Failed, resetting:", e);
       }
     }
-    return [[generateBlankGrid((isUnrolled ? 13 : 8) + DEFAULT_DRUM_ROWS.length)]];
+
+    return [{
+      id: 'track-0',
+      name: 'Track 1',
+      parts: [{ grid: generateBlankGrid(8 + DEFAULT_DRUM_ROWS.length), scale: 'C Maj Pent' }],
+      isLooping: true,
+      volume: 1.0,
+      muted: false,
+      soloed: false
+    }];
   });
+
+  const currentTrack = tracks[editingTrackIndex] || tracks[0];
+  const currentPart = currentTrack.parts[editingPatternIndex] || currentTrack.parts[0];
+
+
+  const [history, setHistory] = useState<{ tracks: Track[], fxGraph: FXGraph }[]>([]);
+  const [redoStack, setRedoStack] = useState<{ tracks: Track[], fxGraph: FXGraph }[]>([]);
+
   const playbackStepRef = useRef(0);
   const playbackPatternRef = useRef(0);
   const queuedPatternRef = useRef(-1);
-  const trackLoopsRef = useRef<(number[] | null)[]>([]); // [start, end] or null for each track
-  const trackSyncStatusRef = useRef<(boolean)[]>([]); // false if track is waiting for global to catch up
+  const trackLoopsRef = useRef<(number[] | null)[]>([]);
   const isFollowModeRef = useRef(true);
-  const songRef = useRef<Grid[][]>(song);
+  const tracksRef = useRef<Track[]>(tracks);
   const bpmRef = useRef(bpm);
   const [trackLoops, setTrackLoops] = useState<(number[] | null)[]>([]);
-  const patternScalesRef = useRef<string[][]>(patternScales);
   const isUnrolledRef = useRef(isUnrolled);
+  const isPerformanceModeRef = useRef(isPerformanceMode);
 
-  useEffect(() => { songRef.current = song; }, [song]);
+  const trackSyncStatusRef = useRef<boolean[]>([]);
+  useEffect(() => { tracksRef.current = tracks; }, [tracks]);
   useEffect(() => { bpmRef.current = bpm; }, [bpm]);
-  useEffect(() => { patternScalesRef.current = patternScales; }, [patternScales]);
   useEffect(() => { isUnrolledRef.current = isUnrolled; }, [isUnrolled]);
   useEffect(() => { trackLoopsRef.current = trackLoops; }, [trackLoops]);
+  useEffect(() => {
+    if (tracks.length !== trackSyncStatusRef.current.length) {
+      trackSyncStatusRef.current = Array(tracks.length).fill(true);
+    }
+  }, [tracks.length]);
 
 
 
-  const rowConfigsRef = useRef<RowConfig[]>([]);
+
 
   // Dragging state for layout
   const dragStartYRef = useRef(0);
@@ -235,48 +183,54 @@ const App: React.FC = () => {
   const [isPieMenuOpen, setIsPieMenuOpen] = useState(false);
   const [pieMenuStartPos, setPieMenuStartPos] = useState({ x: 0, y: 0 }); // Where menu opened
 
-  const commitToHistory = useCallback((newSong: Grid[][] = song, newGraph: FXGraph = fxGraph, newScales: string[][] = patternScales) => {
-    setHistory(prev => [...prev.slice(-19), { song, fxGraph: lastCommittedGraph, patternScales }]);
+  const commitToHistory = useCallback((newTracks?: Track[], newGraph?: FXGraph) => {
+    const nextTracks = newTracks || tracks;
+    const nextGraph = newGraph || fxGraph;
+
+    setHistory(prev => [...prev.slice(-19), { tracks: tracks, fxGraph: lastCommittedGraph }]);
     setRedoStack([]);
-    setSong(newSong);
-    setFxGraph(newGraph);
-    setLastCommittedGraph(newGraph);
-    setPatternScales(newScales);
-  }, [song, fxGraph, lastCommittedGraph, patternScales]);
+
+    setTracks(nextTracks);
+    setFxGraph(nextGraph);
+    setLastCommittedGraph(nextGraph);
+
+    localStorage.setItem('pulse_song', JSON.stringify(nextTracks));
+    localStorage.setItem('pulse_fx_graph', JSON.stringify(nextGraph));
+  }, [tracks, fxGraph, lastCommittedGraph]);
 
   const handleUndo = useCallback(() => {
     if (history.length === 0) return;
-    const prev = history[history.length - 1];
-    setRedoStack(prevRedo => [...prevRedo, { song, fxGraph: lastCommittedGraph, patternScales }]);
-    setHistory(prevHist => prevHist.slice(0, -1));
-    setSong(prev.song);
-    setFxGraph(prev.fxGraph);
-    setLastCommittedGraph(prev.fxGraph);
-    setPatternScales(prev.patternScales);
+    const last = history[history.length - 1];
+    setRedoStack(prev => [...prev.slice(-19), { tracks: tracks, fxGraph: fxGraph }]);
+    setHistory(prev => prev.slice(0, -1));
+
+    setTracks(last.tracks);
+    setFxGraph(last.fxGraph);
+    setLastCommittedGraph(last.fxGraph);
 
     // Safety: Clamp indices if they are now out of bounds
-    const trackCount = prev.song.length;
-    const patternCount = prev.song[0]?.length || 1;
+    const trackCount = last.tracks.length;
+    const patternCount = last.tracks[0]?.parts.length || 1;
     setEditingTrackIndex(ti => Math.min(ti, trackCount - 1));
     setEditingPatternIndex(pi => Math.min(pi, patternCount - 1));
-  }, [history, song, fxGraph, lastCommittedGraph, patternScales]);
+  }, [history, tracks, fxGraph]);
 
   const handleRedo = useCallback(() => {
     if (redoStack.length === 0) return;
     const next = redoStack[redoStack.length - 1];
-    setHistory(prevHist => [...prevHist, { song, fxGraph: lastCommittedGraph, patternScales }]);
-    setRedoStack(prevRedo => prevRedo.slice(0, -1));
-    setSong(next.song);
+    setHistory(prev => [...prev.slice(-19), { tracks: tracks, fxGraph: fxGraph }]);
+    setRedoStack(prev => prev.slice(0, -1));
+
+    setTracks(next.tracks);
     setFxGraph(next.fxGraph);
     setLastCommittedGraph(next.fxGraph);
-    setPatternScales(next.patternScales);
 
     // Safety: Clamp indices if they are now out of bounds
-    const trackCount = next.song.length;
-    const patternCount = next.song[0]?.length || 1;
+    const trackCount = next.tracks.length;
+    const patternCount = next.tracks[0]?.parts.length || 1;
     setEditingTrackIndex(ti => Math.min(ti, trackCount - 1));
     setEditingPatternIndex(pi => Math.min(pi, patternCount - 1));
-  }, [redoStack, song, fxGraph, lastCommittedGraph, patternScales]);
+  }, [redoStack, tracks, fxGraph]);
 
 
   const timerRef = useRef<number | null>(null);
@@ -286,7 +240,7 @@ const App: React.FC = () => {
     return getRowConfigs(scaleName, isUnrolled);
   }, [isUnrolled]);
 
-  const previewNote = useCallback((r: number, note?: Note, scaleName: string = currentScale) => {
+  const previewNote = useCallback((r: number, note?: Note, scaleName: string = currentPart.scale) => {
     audioEngine.init();
     audioEngine.resume();
     const config = rowConfigs(scaleName)[r];
@@ -298,26 +252,32 @@ const App: React.FC = () => {
     } else if (config.type === 'kick') audioEngine.createKick(time, config.gain);
     else if (config.type === 'snare') audioEngine.createSnare(time, config.gain);
     else if (config.type === 'hat') audioEngine.createHiHat(time, config.gain);
-  }, [rowConfigs, bpm, currentScale]);
+  }, [rowConfigs, bpm, currentPart.scale]);
 
   const addNote = (r: number, c: number, d: number = 1, data?: Partial<Note>) => {
-    const newSong = [...song];
-    const track = [...newSong[editingTrackIndex]];
-    const grid = [...track[editingPatternIndex]];
+    const newTracks = [...tracks];
+    const track = { ...newTracks[editingTrackIndex] };
+    const parts = [...track.parts];
+    const part = { ...parts[editingPatternIndex] };
+    const grid = [...part.grid];
     const row = [...grid[r]];
     const note = { d: Math.max(1, Math.round(d)), o: 0, ...data };
     row[c] = note;
     grid[r] = row;
-    track[editingPatternIndex] = grid;
-    newSong[editingTrackIndex] = track;
-    commitToHistory(newSong);
+    part.grid = grid;
+    parts[editingPatternIndex] = part;
+    track.parts = parts;
+    newTracks[editingTrackIndex] = track;
+    commitToHistory(newTracks);
     previewNote(r, note);
   };
 
   const toggleNote = (r: number, c: number) => {
-    const newSong = [...song];
-    const track = [...newSong[editingTrackIndex]];
-    const grid = [...track[editingPatternIndex]];
+    const newTracks = [...tracks];
+    const track = { ...newTracks[editingTrackIndex] };
+    const parts = [...track.parts];
+    const part = { ...parts[editingPatternIndex] };
+    const grid = [...part.grid];
     const row = [...grid[r]];
     if (row[c]) {
       row[c] = null;
@@ -327,86 +287,74 @@ const App: React.FC = () => {
       previewNote(r, note);
     }
     grid[r] = row;
-    track[editingPatternIndex] = grid;
-    newSong[editingTrackIndex] = track;
-    commitToHistory(newSong);
+    part.grid = grid;
+    parts[editingPatternIndex] = part;
+    track.parts = parts;
+    newTracks[editingTrackIndex] = track;
+    commitToHistory(newTracks);
   };
 
   const insertPattern = (atIndex: number) => {
-    const newSong = song.map(track => {
-      const newTrack = [...track];
-      newTrack.splice(atIndex, 0, generateBlankGrid(rowConfigs(currentScale).length));
-      return newTrack;
+    const newTracks = tracks.map(track => {
+      const newPart: TrackPart = {
+        grid: generateBlankGrid(getRowConfigs(track.parts[atIndex]?.scale || 'C Maj Pent', isUnrolled).length),
+        scale: track.parts[atIndex]?.scale || 'C Maj Pent'
+      };
+      const nextParts = [...track.parts];
+      nextParts.splice(atIndex + 1, 0, newPart);
+      return { ...track, parts: nextParts };
     });
-
-    const newPatternScales = patternScales.map(trackScales => {
-      const newTrackScales = [...trackScales];
-      newTrackScales.splice(atIndex, 0, trackScales[atIndex] || 'C Maj Pent');
-      return newTrackScales;
-    });
-
-    commitToHistory(newSong, lastCommittedGraph, newPatternScales);
-    setEditingPatternIndex(atIndex);
+    commitToHistory(newTracks);
   };
 
   const deletePattern = (index: number) => {
-    if (song[0].length <= 1) return;
-    const newSong = song.map(track => track.filter((_, i) => i !== index));
-    const newPatternScales = patternScales.map(trackScales => trackScales.filter((_, i) => i !== index));
-
-    commitToHistory(newSong, lastCommittedGraph, newPatternScales);
-    setEditingPatternIndex(Math.max(0, Math.min(editingPatternIndex, newSong[0].length - 1)));
+    const newTracks = tracks.map(track => {
+      if (track.parts.length <= 1) return track;
+      const nextParts = [...track.parts];
+      nextParts.splice(index, 1);
+      return { ...track, parts: nextParts };
+    });
+    commitToHistory(newTracks);
   };
 
-  const duplicatePattern = useCallback((index: number) => {
-    const newSong = song.map(track => {
-      const newTrack = [...track];
-      const patternToDup = JSON.parse(JSON.stringify(track[index]));
-      newTrack.splice(index + 1, 0, patternToDup);
-      return newTrack;
+  const duplicatePattern = (index: number) => {
+    const newTracks = tracks.map(track => {
+      const sourcePart = track.parts[index];
+      const newPart: TrackPart = {
+        grid: sourcePart.grid.map(row => [...row]),
+        scale: sourcePart.scale
+      };
+      const nextParts = [...track.parts];
+      nextParts.splice(index + 1, 0, newPart);
+      return { ...track, parts: nextParts };
     });
-
-    const newPatternScales = patternScales.map(trackScales => {
-      const next = [...trackScales];
-      next.splice(index + 1, 0, trackScales[index] || 'C Maj Pent');
-      return next;
-    });
-
-    commitToHistory(newSong, lastCommittedGraph, newPatternScales);
-    setEditingPatternIndex(index + 1);
-  }, [song, patternScales, commitToHistory, lastCommittedGraph]);
+    commitToHistory(newTracks);
+  };
 
   const addTrack = () => {
-    const patternCount = song[0].length;
-    const newTrack = Array(patternCount).fill(null).map((_, i) => {
-      const scaleNameForPattern = patternScales[0]?.[i] || 'C Maj Pent';
-      return generateBlankGrid(getRowConfigs(scaleNameForPattern, isUnrolled).length);
-    });
-    const newSong = [...song, newTrack];
-
-    const newTrackScales = Array(patternCount).fill('C Maj Pent');
-    // Proactively copy scales from the first track if available
-    if (patternScales[0]) {
-      for (let i = 0; i < patternCount; i++) newTrackScales[i] = patternScales[0][i] || 'C Maj Pent';
-    }
-    const newPatternScales = [...patternScales, newTrackScales];
-
-    commitToHistory(newSong, lastCommittedGraph, newPatternScales);
-    setEditingTrackIndex(newSong.length - 1);
-    setToast({ message: "New Track Added", visible: true });
-
-    // Dynamic Resizing: Header (~45px) + Tracks (~81px each) + Add Button Area (~70px)
-    const approximateTrackHeight = 82;
-    const extraSpace = 120; // Header + Footer padding
-    const desiredHeight = (newSong.length * approximateTrackHeight) + extraSpace;
-    const maxHeight = window.innerHeight * 0.5;
-    setArrHeight(Math.min(desiredHeight, maxHeight));
+    const newTrack: Track = {
+      id: `track-${tracks.length}-${Math.random().toString(36).substr(2, 9)}`,
+      name: `Track ${tracks.length + 1}`,
+      parts: [
+        {
+          grid: generateBlankGrid(getRowConfigs('C Maj Pent', isUnrolled).length),
+          scale: 'C Maj Pent'
+        }
+      ],
+      isLooping: true,
+      volume: 1.0,
+      muted: false,
+      soloed: false
+    };
+    commitToHistory([...tracks, newTrack]);
   };
 
   const handleCommitMultiNote = useCallback((notes: { fromR: number, fromC: number, toR: number, toC: number, data: Partial<Note> }[]) => {
-    const newSong = JSON.parse(JSON.stringify(song));
-    const track = newSong[editingTrackIndex];
-    const grid = track[editingPatternIndex];
+    const newTracks = [...tracks];
+    const track = { ...newTracks[editingTrackIndex] };
+    const parts = [...track.parts];
+    const part = { ...parts[editingPatternIndex] };
+    const grid = JSON.parse(JSON.stringify(part.grid)); // Deep clone target grid
 
     // 1. Clear old positions
     notes.forEach(({ fromR, fromC }) => {
@@ -415,42 +363,54 @@ const App: React.FC = () => {
 
     // 2. Set new positions
     notes.forEach(({ fromR, fromC, toR, toC, data }) => {
-      const originalNote = song[editingTrackIndex][editingPatternIndex][fromR]?.[fromC];
+      const originalNote = tracks[editingTrackIndex].parts[editingPatternIndex].grid[fromR]?.[fromC];
       if (originalNote && grid[toR]) {
         grid[toR][toC] = { ...originalNote, ...data };
       }
     });
 
-    commitToHistory(newSong);
+    part.grid = grid;
+    parts[editingPatternIndex] = part;
+    track.parts = parts;
+    newTracks[editingTrackIndex] = track;
+    commitToHistory(newTracks);
 
     // Update selection to match new positions
     setSelectedNotes(notes.map(m => ({ r: m.toR, c: m.toC })));
     setToast({ message: `Moved ${notes.length} notes`, visible: true });
-  }, [editingTrackIndex, editingPatternIndex, song, commitToHistory]);
+  }, [editingTrackIndex, editingPatternIndex, tracks, commitToHistory]);
 
   const handleCopyMultiNote = useCallback((notes: { fromR: number, fromC: number, toR: number, toC: number, data: Partial<Note> }[]) => {
-    const newSong = JSON.parse(JSON.stringify(song));
-    const track = newSong[editingTrackIndex];
-    const grid = track[editingPatternIndex];
+    const newTracks = [...tracks];
+    const track = { ...newTracks[editingTrackIndex] };
+    const parts = [...track.parts];
+    const part = { ...parts[editingPatternIndex] };
+    const grid = JSON.parse(JSON.stringify(part.grid)); // Deep clone target grid
 
     // COPY: Do NOT clear old positions. Just set new ones.
     notes.forEach(({ fromR, fromC, toR, toC, data }) => {
-      const originalNote = song[editingTrackIndex][editingPatternIndex][fromR]?.[fromC];
+      const originalNote = tracks[editingTrackIndex].parts[editingPatternIndex].grid[fromR]?.[fromC];
       if (originalNote && grid[toR]) {
         // If target cell occupied, OVERWRITE? Yes, standard behavior.
         grid[toR][toC] = { ...originalNote, ...data };
       }
     });
 
-    commitToHistory(newSong);
+    part.grid = grid;
+    parts[editingPatternIndex] = part;
+    track.parts = parts;
+    newTracks[editingTrackIndex] = track;
+    commitToHistory(newTracks);
     setSelectedNotes(notes.map(m => ({ r: m.toR, c: m.toC })));
     setToast({ message: `Copied ${notes.length} notes`, visible: true });
-  }, [editingTrackIndex, editingPatternIndex, song, commitToHistory]);
+  }, [editingTrackIndex, editingPatternIndex, tracks, commitToHistory]);
 
   const handleCommitNote = useCallback((fromR: number, fromC: number, toR: number, toC: number, data: Partial<Note>) => {
-    const newSong = [...song];
-    const track = [...newSong[editingTrackIndex]];
-    const currentGrid = [...track[editingPatternIndex]];
+    const newTracks = [...tracks];
+    const track = { ...newTracks[editingTrackIndex] };
+    const parts = [...track.parts];
+    const currentPart = { ...parts[editingPatternIndex] };
+    const currentGrid = [...currentPart.grid];
     const note = currentGrid[fromR]?.[fromC];
 
     if (!note) return;
@@ -464,33 +424,39 @@ const App: React.FC = () => {
     currentGrid[toR] = [...currentGrid[toR]];
     currentGrid[toR][toC] = updatedNote;
 
-    track[editingPatternIndex] = currentGrid;
-    newSong[editingTrackIndex] = track;
+    currentPart.grid = currentGrid;
+    parts[editingPatternIndex] = currentPart;
+    track.parts = parts;
+    newTracks[editingTrackIndex] = track;
 
-    commitToHistory(newSong);
+    commitToHistory(newTracks);
     previewNote(toR, { ...data, d: data.d || 1, o: data.o || 0 });
-  }, [editingTrackIndex, editingPatternIndex, song, commitToHistory, previewNote]);
+  }, [editingTrackIndex, editingPatternIndex, tracks, commitToHistory, previewNote]);
 
   const handleUpdateNote = useCallback((r: number, c: number, data: Partial<Note>) => {
-    const newSong = [...song];
-    const track = [...newSong[editingTrackIndex]];
-    const currentGrid = [...track[editingPatternIndex]];
+    const newTracks = [...tracks];
+    const track = { ...newTracks[editingTrackIndex] };
+    const parts = [...track.parts];
+    const currentPart = { ...parts[editingPatternIndex] };
+    const currentGrid = [...currentPart.grid];
     const note = currentGrid[r]?.[c];
     if (!note) return;
 
     currentGrid[r] = [...currentGrid[r]];
     currentGrid[r][c] = { ...note, ...data };
 
-    track[editingPatternIndex] = currentGrid;
-    newSong[editingTrackIndex] = track;
-    commitToHistory(newSong);
-  }, [editingTrackIndex, editingPatternIndex, song, commitToHistory]);
+    currentPart.grid = currentGrid;
+    parts[editingPatternIndex] = currentPart;
+    track.parts = parts;
+    newTracks[editingTrackIndex] = track;
+    commitToHistory(newTracks);
+  }, [editingTrackIndex, editingPatternIndex, tracks, commitToHistory]);
 
   const handleRemix = () => {
     const keys = Object.keys(PRESETS);
     const style = keys[Math.floor(Math.random() * keys.length)];
     const preset = PRESETS[style];
-    const newGrid = generateBlankGrid(rowConfigs(currentScale).length);
+    const newGrid = generateBlankGrid(rowConfigs(currentPart.scale).length);
     const hatRow = newGrid.length - 3;
     const snareRow = newGrid.length - 2;
     const kickRow = newGrid.length - 1;
@@ -500,23 +466,27 @@ const App: React.FC = () => {
     if (preset.hat) preset.hat.forEach((s: number) => newGrid[hatRow][s] = { d: 1, o: 0 });
 
     if (preset.bass) {
-      const synthRowsCount = rowConfigs(currentScale).length - DEFAULT_DRUM_ROWS.length;
+      const synthRowsCount = rowConfigs(currentPart.scale).length - DEFAULT_DRUM_ROWS.length;
       preset.bass.forEach((s: number) => {
         if (Math.random() > 0.5) newGrid[synthRowsCount - 1][s] = { d: 1, o: 0 };
       });
     }
 
-    const newSong = [...song];
-    const track = [...newSong[editingTrackIndex]];
-    track[editingPatternIndex] = newGrid;
-    newSong[editingTrackIndex] = track;
-    commitToHistory(newSong);
+    const newTracks = [...tracks];
+    const track = { ...newTracks[editingTrackIndex] };
+    const parts = [...track.parts];
+    const part = { ...parts[editingPatternIndex] };
+    part.grid = newGrid;
+    parts[editingPatternIndex] = part;
+    track.parts = parts;
+    newTracks[editingTrackIndex] = track;
+    commitToHistory(newTracks);
     setToast({ message: `Style: ${style}`, visible: true });
   };
 
   const handleCopy = useCallback(() => {
     if (selectedNotes.length === 0) return;
-    const currentGrid = song[editingTrackIndex][editingPatternIndex];
+    const currentGrid = tracks[editingTrackIndex].parts[editingPatternIndex].grid;
     const notesToCopy = selectedNotes.map(({ r, c }) => {
       const note = currentGrid[r][c];
       return note ? { r: r, c: c, note: { ...note } } : null;
@@ -534,35 +504,100 @@ const App: React.FC = () => {
       setClipboard(normalized);
       setToast({ message: `Copied ${notesToCopy.length} notes`, visible: true });
     }
-  }, [song, editingTrackIndex, editingPatternIndex, selectedNotes]);
+  }, [tracks, editingTrackIndex, editingPatternIndex, selectedNotes]);
 
   const handlePaste = useCallback(() => {
     if (!clipboard || clipboard.length === 0) return;
-    setSong(prevSong => {
-      const newSong = [...prevSong];
-      const track = [...newSong[editingTrackIndex]];
-      const grid = JSON.parse(JSON.stringify(track[editingPatternIndex])); // Deep clone target grid
+    setTracks(prevTracks => {
+      const newTracks = [...prevTracks];
+      const track = { ...newTracks[editingTrackIndex] };
+      const parts = [...track.parts];
+      const part = { ...parts[editingPatternIndex] };
+      const grid = JSON.parse(JSON.stringify(part.grid)); // Deep clone target grid
 
       clipboard.forEach(({ r, c, note }) => {
-        // Find current cursor/offset or just paste at 0,0 relative?
-        // Let's paste at 0,0 for now or maybe centered. 
-        // User didn't specify, but relative to top-left is standard.
-        // We'll just paste them into the target.
         if (grid[r] && r < grid.length) {
-          const targetC = c; // Could add offset if we track mouse?
+          const targetC = c;
           if (targetC < STEPS_PER_PATTERN) {
             grid[r][targetC] = note;
           }
         }
       });
 
-      track[editingPatternIndex] = grid;
-      newSong[editingTrackIndex] = track;
-      commitToHistory(newSong);
-      return newSong;
+      part.grid = grid;
+      parts[editingPatternIndex] = part;
+      track.parts = parts;
+      newTracks[editingTrackIndex] = track;
+      commitToHistory(newTracks);
+      return newTracks;
     });
     setToast({ message: `Pasted ${clipboard.length} notes`, visible: true });
   }, [clipboard, editingTrackIndex, editingPatternIndex, commitToHistory]);
+
+  const fitSequencerToNotes = useCallback((grid: Grid, configs: RowConfig[]) => {
+    let minR = Infinity;
+    let maxR = -Infinity;
+    let hasNotes = false;
+
+    grid.forEach((row, r) => {
+      if (configs[r]?.type === 'synth' && row.some(n => n !== null)) {
+        if (r < minR) minR = r;
+        if (r > maxR) maxR = r;
+        hasNotes = true;
+      }
+    });
+
+    if (hasNotes) {
+      const centerR = (minR + maxR) / 2;
+      const targetScroll = Math.max(0, (centerR * 40) - (arrHeight / 2) - 100);
+      setSequencerScrollTop(targetScroll);
+    }
+  }, [arrHeight]);
+
+  const changePatternScale = useCallback((trackIdx: number, partIdx: number, newScale: string) => {
+    const currentTracks = tracksRef.current;
+    if (!currentTracks[trackIdx] || !currentTracks[trackIdx].parts[partIdx]) return;
+
+    const sourcePart = currentTracks[trackIdx].parts[partIdx];
+    const sourceScale = sourcePart.scale;
+    if (sourceScale === newScale) return;
+
+    const newGrid = remapGrid(sourcePart, newScale, isUnrolledRef.current, isUnrolledRef.current);
+
+    const nextTracks = currentTracks.map((trk, t) => {
+      if (t !== trackIdx) return trk;
+      const nextParts = trk.parts.map((prt, p) => {
+        if (p !== partIdx) return prt;
+        return { ...prt, grid: newGrid, scale: newScale };
+      });
+      return { ...trk, parts: nextParts };
+    });
+
+    commitToHistory(nextTracks);
+    setToast({ message: `Scale: ${newScale}`, visible: true });
+
+    if (!isUnrolledRef.current) {
+      setSequencerScrollTop(0);
+    } else {
+      fitSequencerToNotes(newGrid, getRowConfigs(newScale, true));
+    }
+  }, [commitToHistory, fitSequencerToNotes]);
+
+  const remapSongLayout = useCallback((targetUnrolled: boolean, sourceUnrolled: boolean) => {
+    const nextTracks = tracksRef.current.map(track => ({
+      ...track,
+      parts: track.parts.map(part => ({
+        ...part,
+        grid: remapGrid(part, part.scale, targetUnrolled, sourceUnrolled)
+      }))
+    }));
+    setTracks(nextTracks);
+
+    if (targetUnrolled) {
+      const currentPart = nextTracks[editingTrackIndex].parts[editingPatternIndex];
+      fitSequencerToNotes(currentPart.grid, getRowConfigs(currentPart.scale, true));
+    }
+  }, [editingTrackIndex, editingPatternIndex, fitSequencerToNotes]);
 
   const handleReset = useCallback(() => {
     if (!resetArmed) {
@@ -573,7 +608,15 @@ const App: React.FC = () => {
     }
 
     // NUCLEAR RESET - TOTAL WIPE (Preserving Undo)
-    const emptySong = [[generateBlankGrid(getRowConfigs('C Maj Pent', isUnrolled).length)]];
+    const emptyTracks: Track[] = [{
+      id: 'track-0',
+      name: 'Track 1',
+      parts: [{ grid: generateBlankGrid(getRowConfigs('C Maj Pent', isUnrolled).length), scale: 'C Maj Pent' }],
+      isLooping: true,
+      volume: 1.0,
+      muted: false,
+      soloed: false
+    }];
 
     setEditingTrackIndex(0);
     setEditingPatternIndex(0);
@@ -582,7 +625,7 @@ const App: React.FC = () => {
     setResetArmed(false);
     setArrHeight(180);
 
-    commitToHistory(emptySong, {
+    commitToHistory(emptyTracks, {
       nodes: [
         { id: 'src', type: 'source', x: 100, y: 300, params: {} },
         { id: 'out', type: 'output', x: 800, y: 300, params: {} }
@@ -593,7 +636,6 @@ const App: React.FC = () => {
       nextId: 1
     });
 
-    setPatternScales([['C Maj Pent']]);
     setToast({ message: "SYSTEM WIPED - UNDO PRESERVED", visible: true });
 
     // Force cleanup of any lingering audio state if possible
@@ -618,34 +660,40 @@ const App: React.FC = () => {
         loopCount++;
         const currentStep = playbackStepRef.current;
         const globalPattern = playbackPatternRef.current;
-        const currentSong = songRef.current;
+        const currentTracks = tracksRef.current;
         const currentBpm = bpmRef.current;
         const currentLoops = trackLoopsRef.current;
 
         // Play all tracks for this step
-        currentSong.forEach((track, trackIdx) => {
-          let patternIdx = globalPattern;
+        currentTracks.forEach((track, trackIdx) => {
+          if (track.muted) return;
+          // Solo logic
+          const hasSolo = currentTracks.some(t => t.soloed);
+          if (hasSolo && !track.soloed) return;
+
+          let partIdx = globalPattern;
           const myLoop = currentLoops[trackIdx];
 
           if (myLoop) {
             const [start, end] = myLoop;
             const loopLen = (end - start) + 1;
-            patternIdx = start + (globalPattern % loopLen);
+            partIdx = start + (globalPattern % loopLen);
             trackSyncStatusRef.current[trackIdx] = true;
           } else {
-            // "Wait for sync" logic: if we were looping and released, 
-            // we follow global IF global hits our "wait" index.
-            // Simplified: for now, most users expect immediate resume or wait.
-            // Requirement was: "pause until other track catches back up"
-            // We'll just follow global for now to keep it usable, 
-            // but we'll flag it for a more complex implementation if needed.
-            patternIdx = globalPattern;
+            // Check if track has this part index
+            if (partIdx >= track.parts.length) {
+              if (track.isLooping && track.parts.length > 0) {
+                partIdx = globalPattern % track.parts.length;
+              } else {
+                return; // Past the end of non-looping track
+              }
+            }
           }
 
-          if (track[patternIdx]) {
-            const patternScale = patternScalesRef.current[trackIdx]?.[patternIdx] || 'C Maj Pent';
-            const patternRowConfigs = rowConfigs(patternScale);
-            audioEngine.playStep(track[patternIdx], currentStep, nextNoteTimeRef.current, patternRowConfigs, currentBpm);
+          const part = track.parts[partIdx];
+          if (part && part.grid) {
+            const patternRowConfigs = getRowConfigs(part.scale, isUnrolledRef.current);
+            audioEngine.playStep(part.grid, currentStep, nextNoteTimeRef.current, patternRowConfigs, currentBpm, track.volume);
           }
         });
 
@@ -661,7 +709,26 @@ const App: React.FC = () => {
             queuedPatternRef.current = -1;
             setQueuedPatternIndex(-1);
           } else {
-            nextPattern = (globalPattern + 1) % currentSong[0].length;
+            const maxParts = Math.max(...currentTracks.map(t => t.parts.length), 1);
+            if (isPerformanceModeRef.current && globalPattern === maxParts - 1) {
+              // Auto-duplicate last part for all tracks to keep the performance going
+              setTimeout(() => {
+                setTracks(prev => {
+                  const next = prev.map(track => {
+                    const lastPart = track.parts[track.parts.length - 1];
+                    const newPart: TrackPart = {
+                      grid: lastPart.grid.map(row => [...row]),
+                      scale: lastPart.scale
+                    };
+                    return { ...track, parts: [...track.parts, newPart] };
+                  });
+                  return next;
+                });
+              }, 0);
+              nextPattern = globalPattern + 1;
+            } else {
+              nextPattern = (globalPattern + 1) % maxParts;
+            }
           }
           if (isFollowModeRef.current) setEditingPatternIndex(nextPattern);
           playbackPatternRef.current = nextPattern;
@@ -677,234 +744,25 @@ const App: React.FC = () => {
     } catch (e) {
       console.error("Scheduler Failure:", e);
     }
-  }, [audioEngine, rowConfigs]);
+  }, [audioEngine]);
 
-  useEffect(() => { songRef.current = song; }, [song]);
   useEffect(() => {
     bpmRef.current = bpm;
     audioEngine.setBpm(bpm);
   }, [bpm]);
-  useEffect(() => { rowConfigsRef.current = rowConfigs(currentScale); }, [rowConfigs, currentScale]);
+  useEffect(() => { isPerformanceModeRef.current = isPerformanceMode; }, [isPerformanceMode]);
   useEffect(() => { queuedPatternRef.current = queuedPatternIndex; }, [queuedPatternIndex]);
   useEffect(() => { isFollowModeRef.current = isFollowMode; }, [isFollowMode]);
   useEffect(() => { audioEngine.setMasterVolume(masterVolume); }, [masterVolume]);
 
-  const fitSequencerToNotes = useCallback((grid: Grid, configs: RowConfig[]) => {
-    let minR = Infinity;
-    let maxR = -Infinity;
-    let hasNotes = false;
 
-    grid.forEach((row, r) => {
-      if (configs[r]?.type === 'synth' && row.some(n => n !== null)) {
-        if (r < minR) minR = r;
-        if (r > maxR) maxR = r;
-        hasNotes = true;
-      }
-    });
-
-    if (hasNotes) {
-      // Center the view on the range
-      const centerR = (minR + maxR) / 2;
-      const targetScroll = Math.max(0, (centerR * 40) - (arrHeight / 2) - 100);
-      // Approximate viewport height isn't known exactly here, using safe offset
-      setSequencerScrollTop(targetScroll);
-    }
-  }, [arrHeight]);
-
-  const remapSongLayout = useCallback((targetUnrolled: boolean, forceScaleUpdate?: { track: number, pattern: number, newScale: string, oldScale?: string }) => {
-    setSong(prevSong => prevSong.map((track, tIdx) => track.map((grid, pIdx) => {
-      const currentScaleName = (forceScaleUpdate && forceScaleUpdate.track === tIdx && forceScaleUpdate.pattern === pIdx && forceScaleUpdate.oldScale)
-        ? forceScaleUpdate.oldScale
-        : (patternScales[tIdx]?.[pIdx] || 'C Maj Pent');
-
-      const targetScaleName = (forceScaleUpdate && forceScaleUpdate.track === tIdx && forceScaleUpdate.pattern === pIdx)
-        ? forceScaleUpdate.newScale
-        : currentScaleName;
-
-
-      const sourceConfigs = getRowConfigs(currentScaleName, isUnrolled);
-      const targetConfigs = getRowConfigs(targetScaleName, targetUnrolled);
-
-      // Rule: If we are in rolled mode and only changing the scale, PRESERVE visual positions (relative to a best-fit center)
-      // and align the vertical offset to minimize TONAL JUMP (closest frequency center).
-      if (!isUnrolled && !targetUnrolled && currentScaleName !== targetScaleName) {
-        const currentGrid = grid;
-        let totalMidi = 0;
-        let noteCount = 0;
-        currentGrid.forEach((row, r) => {
-          if (sourceConfigs[r]?.type !== 'synth') return; // Skip drums
-          row.forEach(note => {
-            if (note) {
-              const label = sourceConfigs[r].label;
-              totalMidi += getLabelSemitones(label) + (note.oct || 0) * 12;
-              noteCount++;
-            }
-          });
-        });
-
-        const newGrid = generateBlankGrid(targetConfigs.length);
-
-        if (noteCount === 0) {
-          // If no synth notes, just preserve drums
-          sourceConfigs.forEach((config, r) => {
-            if (config.type !== 'synth') {
-              const targetDrumIdx = targetConfigs.findIndex(c => c.type === config.type && c.label === config.label);
-              if (targetDrumIdx !== -1) newGrid[targetDrumIdx] = [...grid[r]];
-            }
-          });
-          return newGrid;
-        }
-
-        // 2. Find the optimal row offset S using ANCHOR logic (Lowest Note Matching)
-        let lowestSynthRow = -1;
-
-        // Find anchor note (lowest synth row with notes)
-        // Scan backwards from bottom to find the "lowest" musical note (highest index)
-        for (let r = grid.length - 1; r >= 0; r--) {
-          if (sourceConfigs[r]?.type === 'synth' && grid[r].some(n => n !== null)) {
-            lowestSynthRow = r;
-            break;
-          }
-        }
-
-        let bestS = 0;
-        let minJump = 0; // Just for logging
-
-        if (lowestSynthRow !== -1) {
-          // Calculate Absolute Pitch of the Anchor
-          const anchorLabel = sourceConfigs[lowestSynthRow].label;
-          const anchorMidi = getLabelSemitones(anchorLabel);
-
-          // Find the Closest Row in Target Configs
-          let bestTargetRow = -1;
-          let bestDiff = Infinity;
-
-          targetConfigs.forEach((tc, tIdx) => {
-            if (tc.type !== 'synth') return;
-            const tMidi = getLabelSemitones(tc.label);
-            const diff = Math.abs(tMidi - anchorMidi);
-            if (diff < bestDiff) {
-              bestDiff = diff;
-              bestTargetRow = tIdx;
-            }
-          });
-
-          if (bestTargetRow !== -1) {
-            // debug
-            console.log(`[Anchor Debug] Anchor '${anchorLabel}' (${anchorMidi}) @ Row ${lowestSynthRow}. Best Target Row ${bestTargetRow} (${targetConfigs[bestTargetRow].label}, ${getLabelSemitones(targetConfigs[bestTargetRow].label)}). Diff: ${bestDiff}`);
-
-            bestS = lowestSynthRow - bestTargetRow;
-            minJump = bestDiff;
-          } else {
-            console.warn("[Anchor Debug] No best target row found?");
-          }
-        } else {
-          console.log("[Anchor Debug] No Lowest Synth Row found (No Notes?)");
-        }
-
-        // 3. Map notes using the best global offset S (Synths) + Absolute (Drums)
-        console.log(`[Tonal Alignment] Scale: ${currentScaleName} -> ${targetScaleName} | Best Shift S: ${bestS} | Min Avg Jump: ${minJump.toFixed(2)}`);
-        setToast({ message: `Aligned ${targetScaleName} (Shift: ${bestS}, Jump: ${minJump.toFixed(1)}st)`, visible: true });
-
-        // PASS 1: Synths (Tonal Shift)
-        grid.forEach((row, r) => {
-          if (sourceConfigs[r]?.type && sourceConfigs[r].type !== 'synth') return; // Skip drums
-
-          const targetR = r - bestS;
-          if (targetR >= 0 && targetR < targetConfigs.length && targetConfigs[targetR].type === 'synth') {
-            newGrid[targetR] = row.map(note => note ? { ...note, oct: targetUnrolled ? note.oct : 0 } : null);
-          }
-        });
-
-        // PASS 2: Drums (Absolute Match)
-        sourceConfigs.forEach((config, r) => {
-          if (config.type !== 'synth') {
-            const targetDrumIdx = targetConfigs.findIndex(c => c.type === config.type && c.label === config.label);
-            console.log(`[DRUM MAPPING] Source Row ${r} (${config.label}) -> Target Row ${targetDrumIdx}`);
-            if (targetDrumIdx !== -1 && grid[r]) {
-              newGrid[targetDrumIdx] = [...grid[r]];
-            } else {
-              console.warn(`[DRUM MAPPING] FAILED TO MAP Source Row ${r} (${config.label})`);
-            }
-          }
-        });
-
-        // AUTO-FIT VIEWPORT
-        if (targetUnrolled) {
-          setTimeout(() => fitSequencerToNotes(newGrid, targetConfigs), 50);
-        } else {
-          setSequencerScrollTop(0);
-        }
-
-        return newGrid;
-      }
-
-      if (sourceConfigs.length === grid.length && currentScaleName === targetScaleName && isUnrolled === targetUnrolled) {
-        return grid;
-      }
-      return remapGrid(grid, sourceConfigs, targetConfigs, targetUnrolled);
-    })));
-  }, [song, patternScales, isUnrolled]);
-
-  const changePatternScale = useCallback((trackIdx: number, patternIdx: number, newScale: string) => {
-    // 1. Capture Old State from Closure/Refs
-    // We access `song` and `patternScales` directly from state
-    const currentTrack = song[trackIdx];
-    if (!currentTrack) return;
-    const currentGrid = currentTrack[patternIdx];
-    if (!currentGrid) return;
-
-    const oldScale = patternScales[trackIdx]?.[patternIdx] || 'C Maj Pent';
-
-    // 2. Generate Configs
-    const oldConfigs = getRowConfigs(oldScale, isUnrolled);
-    const newConfigs = getRowConfigs(newScale, isUnrolled); // Assume layout mode doesn't change during scale switch
-
-    // 3. Remap Grid using Logic
-    const newGrid = remapGrid(currentGrid, oldConfigs, newConfigs, isUnrolled);
-
-    // 4. Atomic Update
-    setSong(prevSong => {
-      const nextSong = [...prevSong];
-      const nextTrack = [...nextSong[trackIdx]];
-      nextTrack[patternIdx] = newGrid;
-      nextSong[trackIdx] = nextTrack;
-      return nextSong;
-    });
-
-    const newPatternScales = patternScales.map((trackScales, i) => {
-      if (i !== trackIdx) return trackScales;
-      const next = [...trackScales];
-      next[patternIdx] = newScale;
-      return next;
-    });
-    setPatternScales(newPatternScales);
-
-    // 5. History & Feedback
-    setToast({ message: `Scale: ${newScale}`, visible: true });
-
-    // IMPORTANT: Commit explicit new state to history, not old state
-    // We must manually construct the new state object for history
-    const historySong = [...song];
-    const historyTrack = [...historySong[trackIdx]];
-    historyTrack[patternIdx] = newGrid;
-    historySong[trackIdx] = historyTrack;
-
-    setHistory(prev => [...prev.slice(-19), { song: historySong, fxGraph: lastCommittedGraph, patternScales: newPatternScales }]);
-
-    // 6. Auto-fit if needed
-    if (isUnrolled) {
-      setTimeout(() => fitSequencerToNotes(newGrid, newConfigs), 50);
-    } else {
-      setSequencerScrollTop(0);
-    }
-
-  }, [song, patternScales, isUnrolled, lastCommittedGraph]); // Dependencies crucial
 
   // Auto-center grid on note
   useEffect(() => {
     if (viewMode !== 'sequencer' || !isUnrolled) return;
-    const currentGrid = song[editingTrackIndex][editingPatternIndex];
+    const currentGrid = tracks[editingTrackIndex]?.parts[editingPatternIndex]?.grid;
+    if (!currentGrid) return;
+
     let firstRowWithNote = -1;
     for (let r = 0; r < currentGrid.length; r++) {
       if (currentGrid[r].some(n => n !== null)) {
@@ -917,7 +775,7 @@ const App: React.FC = () => {
       // Center it
       setSequencerScrollTop(Math.max(0, rowY - 200));
     }
-  }, [editingTrackIndex, editingPatternIndex, isUnrolled, viewMode, currentScale]);
+  }, [editingTrackIndex, editingPatternIndex, isUnrolled, viewMode, currentPart.scale, tracks]);
 
   useEffect(() => { audioEngine.setMasterVolume(masterVolume); }, [masterVolume]);
 
@@ -929,8 +787,8 @@ const App: React.FC = () => {
   }, [fxGraph]);
 
   useEffect(() => {
-    localStorage.setItem('pulse_song', JSON.stringify(song));
-  }, [song]);
+    localStorage.setItem('pulse_song', JSON.stringify(tracks));
+  }, [tracks]);
 
 
   useEffect(() => {
@@ -1006,18 +864,20 @@ const App: React.FC = () => {
       if ((e.key === 'Delete' || e.key === 'Backspace') && !isInput) {
         if (selectedNotes.length > 0) {
           e.preventDefault();
-          setSong(prevSong => {
-            const newSong = [...prevSong];
-            const track = [...newSong[editingTrackIndex]];
-            const grid = [...track[editingPatternIndex]];
-            selectedNotes.forEach(({ r, c }) => {
-              grid[r] = [...grid[r]];
-              grid[r][c] = null;
-            });
-            track[editingPatternIndex] = grid;
-            newSong[editingTrackIndex] = track;
-            return newSong;
+          const newTracks = [...tracks];
+          const track = { ...newTracks[editingTrackIndex] };
+          const parts = [...track.parts];
+          const part = { ...parts[editingPatternIndex] };
+          const grid = [...part.grid];
+          selectedNotes.forEach(({ r, c }) => {
+            grid[r] = [...grid[r]];
+            grid[r][c] = null;
           });
+          part.grid = grid;
+          parts[editingPatternIndex] = part;
+          track.parts = parts;
+          newTracks[editingTrackIndex] = track;
+          commitToHistory(newTracks);
           setSelectedNotes([]);
           setToast({ message: `Deleted ${selectedNotes.length} notes`, visible: true });
         }
@@ -1044,7 +904,7 @@ const App: React.FC = () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [handleUndo, handleRedo, duplicatePattern, editingPatternIndex, isResizingArr, selectedNotes, editingTrackIndex, handleCopy, handlePaste, setIsPlaying, setSong, setToast]); // Added missing dependencies
+  }, [handleUndo, handleRedo, duplicatePattern, editingPatternIndex, isResizingArr, selectedNotes, editingTrackIndex, handleCopy, handlePaste, setIsPlaying, tracks, commitToHistory, setToast]);
 
 
   return (
@@ -1068,7 +928,7 @@ const App: React.FC = () => {
               <span className="text-[9px] uppercase tracking-widest text-slate-500 font-bold">Scale</span>
               <select
                 className={`bg-slate-800/80 border border-white/10 rounded-lg px-2 py-1 text-[10px] font-black uppercase text-sky-400 outline-none hover:border-sky-500/50 transition-all cursor-pointer ${isUnrolled ? 'opacity-20 pointer-events-none grayscale' : ''}`}
-                value={patternScales[editingTrackIndex]?.[editingPatternIndex] || 'C Maj Pent'}
+                value={currentPart.scale}
                 disabled={isUnrolled}
                 onChange={(e) => {
                   changePatternScale(editingTrackIndex, editingPatternIndex, e.target.value);
@@ -1081,8 +941,10 @@ const App: React.FC = () => {
             <div className="flex items-center gap-2">
               <button
                 onClick={() => {
-                  remapSongLayout(!isUnrolled);
-                  setIsUnrolled(!isUnrolled);
+                  const target = !isUnrolled;
+                  remapSongLayout(target, isUnrolled);
+                  setIsUnrolled(target);
+                  setSequencerScrollTop(0); // Reset scroll on toggle
                 }}
                 className={`px-2 py-1 rounded border transition-all text-xs font-bold ${isUnrolled ? 'bg-sky-500 border-sky-400 text-white' : 'text-slate-500 border-slate-700 hover:text-white'}`}
                 title="Unroll Piano"
@@ -1162,14 +1024,14 @@ const App: React.FC = () => {
           <div className="flex-1 min-h-0 bg-slate-900 overflow-hidden relative">
             {viewMode === 'sequencer' && (
               <CanvasSequencer
-                grid={song[editingTrackIndex][editingPatternIndex]}
-                rowConfigs={rowConfigs(currentScale)}
+                grid={currentPart.grid}
+                rowConfigs={getRowConfigs(currentPart.scale, isUnrolled)}
                 onToggleNote={toggleNote}
                 onAddNote={addNote}
                 onCommitNote={handleCommitNote}
                 onCommitMultiNote={handleCommitMultiNote}
                 onCopyMultiNote={handleCopyMultiNote}
-                onPreviewNote={(r, note) => previewNote(r, note, currentScale)}
+                onPreviewNote={(r, note) => previewNote(r, note, currentPart.scale)}
                 onSelectNotes={setSelectedNotes}
                 selectedNotes={selectedNotes}
                 playbackStep={playbackPatternIndex === editingPatternIndex ? playbackStep : -1}
@@ -1182,8 +1044,8 @@ const App: React.FC = () => {
             )}
             {viewMode === 'spreadsheet' && (
               <SpreadsheetView
-                grid={song[editingTrackIndex][editingPatternIndex]}
-                rowConfigs={rowConfigs(currentScale)}
+                grid={currentPart.grid}
+                rowConfigs={getRowConfigs(currentPart.scale, isUnrolled)}
                 onUpdateNote={handleUpdateNote}
               />
             )}
@@ -1191,7 +1053,7 @@ const App: React.FC = () => {
               <NodalInterface
                 graph={fxGraph}
                 onUpdateGraph={setFxGraph}
-                onCommitGraph={(newGraph) => commitToHistory(song, newGraph)}
+                onCommitGraph={(newGraph) => commitToHistory(tracks, newGraph)}
               />
             )}
           </div>
@@ -1217,13 +1079,12 @@ const App: React.FC = () => {
             </div>
             <div className="shrink-0 transition-shadow duration-300" style={{ height: `${arrHeight}px` }}>
               <ArrangementView
-                song={song}
+                tracks={tracks}
                 editingTrackIndex={editingTrackIndex}
                 editingPatternIndex={editingPatternIndex}
                 playbackPatternIndex={playbackPatternIndex}
                 queuedPatternIndex={queuedPatternIndex}
                 trackLoops={trackLoops}
-                rowConfigs={rowConfigs(currentScale)}
                 onSelectPattern={(trackIdx, patIdx) => {
                   setEditingTrackIndex(trackIdx);
                   setEditingPatternIndex(patIdx);
@@ -1245,6 +1106,8 @@ const App: React.FC = () => {
                 onToggleFollow={setIsFollowMode}
                 bpm={bpm}
                 playbackStep={playbackStep}
+                isPerformanceMode={isPerformanceMode}
+                onSetPerformanceMode={setIsPerformanceMode}
               />
             </div>
           </>
@@ -1261,14 +1124,14 @@ const App: React.FC = () => {
       <ScalePieMenu
         isOpen={isPieMenuOpen}
         mousePos={pieMenuStartPos}
-        currentScale={patternScales[editingTrackIndex]?.[editingPatternIndex] || 'C Maj Pent'}
+        currentScale={currentPart.scale}
         onSelectScale={(newScale) => {
           setIsPieMenuOpen(false);
           changePatternScale(editingTrackIndex, editingPatternIndex, newScale);
         }}
         onClose={() => setIsPieMenuOpen(false)}
       />
-    </div >
+    </div>
   );
 };
 

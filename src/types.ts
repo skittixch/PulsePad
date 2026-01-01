@@ -39,16 +39,27 @@ export interface FXGraph {
     nextId?: number;
 }
 
+export interface TrackPart {
+    grid: Grid;
+    scale: string;
+}
+
+export interface Track {
+    id: string;
+    name: string;
+    parts: TrackPart[];
+    isLooping: boolean;
+    volume: number;
+    muted: boolean;
+    soloed: boolean;
+}
+
 export interface SongState {
-    song: Grid[][];
+    tracks: Track[];
     bpm: number;
-    currentScale: string;
-    patternScales: string[][];
-    drumRows: RowConfig[];
-    soundConfig: SoundConfig;
     masterGain: number;
-    synthGains: number[];
     fxGraph: FXGraph;
+    isPerformanceMode: boolean;
 }
 
 export interface SoundConfig {
@@ -57,3 +68,4 @@ export interface SoundConfig {
     snare: { freq: number; decay: number; mix: number };
     hat: { freq: number; decay: number };
 }
+
