@@ -139,7 +139,7 @@ const NODE_DEFS = {
     lfo: {
         name: "LFO", color: "border-indigo-400", outType: "scalar",
         params: [
-            { id: "rate", label: "Rate", min: 0.1, max: 20, step: 0.1, default: 1.0, type: "scalar" },
+            { id: "rate", label: "Rate", min: 0.1, max: 5, step: 0.001, default: 1.0, type: "scalar" },
             { id: "amp", label: "Amp", min: 0, max: 1, step: 0.01, default: 1.0, type: "scalar" },
             { id: "phase", label: "Phase", min: 0, max: 1, step: 0.01, default: 0, type: "scalar" },
             { id: "normalize", label: "Norm", default: 0, type: "bool" },
@@ -178,6 +178,8 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
     const [hoveredConnection, setHoveredConnection] = useState<{ source: string, target: string } | null>(null);
     const [isCutting, setIsCutting] = useState(false);
     const [cutterPath, setCutterPath] = useState<{ x: number, y: number }[]>([]);
+    const [editingParam, setEditingParam] = useState<{ nodeId: string, param: string, tempVal: string } | null>(null);
+    const [clipboard, setClipboard] = useState<FXNode[]>([]);
     const panningPrevented = useRef(false);
 
     useEffect(() => {
@@ -437,7 +439,85 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
+            if (e.target instanceof HTMLTextAreaElement) return;
+            // Allow typing in inputs (handled by capturing logic, but double check)
+            if (e.target instanceof HTMLInputElement && e.target.type === 'text') return;
+
+            // DELETE
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                if (selectedNodeIds.size > 0) {
+                    const newNodes = graph.nodes.filter(n => !selectedNodeIds.has(n.id));
+                    const newConnections = graph.connections.filter(c => !selectedNodeIds.has(c.source) && !selectedNodeIds.has(c.target));
+                    onCommitGraph({ ...graph, nodes: newNodes, connections: newConnections });
+                    setSelectedNodeIds(new Set());
+                }
+            }
+
+            // CLIPBOARD
+            if (e.ctrlKey || e.metaKey) {
+                if (e.key === 'c') {
+                    const nodesToCopy = graph.nodes.filter(n => selectedNodeIds.has(n.id));
+                    if (nodesToCopy.length > 0) {
+                        setClipboard(nodesToCopy);
+                    }
+                } else if (e.key === 'x') {
+                    const nodesToCopy = graph.nodes.filter(n => selectedNodeIds.has(n.id));
+                    if (nodesToCopy.length > 0) {
+                        setClipboard(nodesToCopy);
+                        const newNodes = graph.nodes.filter(n => !selectedNodeIds.has(n.id));
+                        const newConnections = graph.connections.filter(c => !selectedNodeIds.has(c.source) && !selectedNodeIds.has(c.target));
+                        onCommitGraph({ ...graph, nodes: newNodes, connections: newConnections });
+                        setSelectedNodeIds(new Set());
+                    }
+                } else if (e.key === 'v') {
+                    if (clipboard.length > 0) {
+                        const newNodes: FXNode[] = [];
+                        const idMap = new Map<string, string>();
+
+                        let minX = Infinity, minY = Infinity;
+                        clipboard.forEach(n => {
+                            minX = Math.min(minX, n.x);
+                            minY = Math.min(minY, n.y);
+                        });
+
+                        // Paste at mouse position (transformed)
+                        const pasteX = (mousePos.x - panOffset.x);
+                        const pasteY = (mousePos.y - panOffset.y);
+
+                        clipboard.forEach(n => {
+                            const newId = `node_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+                            idMap.set(n.id, newId);
+                            newNodes.push({
+                                ...n,
+                                id: newId,
+                                x: n.x - minX + pasteX,
+                                y: n.y - minY + pasteY
+                            });
+                        });
+
+                        onCommitGraph({ ...graph, nodes: [...graph.nodes, ...newNodes] });
+                        setSelectedNodeIds(new Set(newNodes.map(n => n.id)));
+                    }
+                } else if (e.key === 'd') {
+                    e.preventDefault();
+                    if (selectedNodeIds.size > 0) {
+                        const nodesToCopy = graph.nodes.filter(n => selectedNodeIds.has(n.id));
+                        const newNodes: FXNode[] = [];
+                        nodesToCopy.forEach(n => {
+                            const newId = `node_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+                            newNodes.push({
+                                ...n,
+                                id: newId,
+                                x: n.x + 20,
+                                y: n.y + 20
+                            });
+                        });
+                        onCommitGraph({ ...graph, nodes: [...graph.nodes, ...newNodes] });
+                        setSelectedNodeIds(new Set(newNodes.map(n => n.id)));
+                    }
+                }
+            }
+
             if (e.key.toLowerCase() === 'f') frameGraph();
             if (e.key.toLowerCase() === 'l') layoutNodes();
             if (e.key.toLowerCase() === 'y') setIsCutting(true);
@@ -1067,10 +1147,48 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
                                             </div>
                                             <div className="flex items-center gap-1.5">
                                                 <div className="flex flex-col items-end">
-                                                    <span className={`text-[10px] ${hasInput ? 'text-slate-600 line-through opacity-40' : 'text-sky-400'}`}>
-                                                        {pDef.type === 'bool' ? (node.params[pDef.id] ? 'ON' : 'OFF') : (node.params[pDef.id] ?? pDef.default).toFixed(pDef.type === 'int' ? 0 : 2)}
-                                                    </span>
-                                                    {pDef.type === 'bool' && !hasInput && (
+                                                    {editingParam?.nodeId === node.id && editingParam?.param === pDef.id ? (
+                                                        <input
+                                                            type="text"
+                                                            autoFocus
+                                                            onFocus={(e) => e.target.select()}
+                                                            value={editingParam.tempVal}
+                                                            onChange={(e) => setEditingParam({ ...editingParam, tempVal: e.target.value })}
+                                                            onBlur={() => {
+                                                                const val = parseFloat(editingParam.tempVal);
+                                                                if (!isNaN(val)) updateParam(node.id, pDef.id, val);
+                                                                setEditingParam(null);
+                                                            }}
+                                                            onKeyDown={(e) => {
+                                                                if (e.key === 'Enter') {
+                                                                    const val = parseFloat(editingParam.tempVal);
+                                                                    if (!isNaN(val)) updateParam(node.id, pDef.id, val);
+                                                                    setEditingParam(null);
+                                                                }
+                                                            }}
+                                                            className="w-12 bg-slate-800 text-sky-400 text-[10px] font-mono font-bold text-right border border-sky-500/50 rounded px-1 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                                                        />
+                                                    ) : (
+                                                        <span
+                                                            className={`text-[10px] cursor-pointer hover:bg-white/10 px-0.5 rounded transition-colors ${hasInput ? 'text-slate-600 line-through opacity-40' : 'text-sky-400'}`}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                if (!hasInput && pDef.type !== 'bool') {
+                                                                    setEditingParam({
+                                                                        nodeId: node.id,
+                                                                        param: pDef.id,
+                                                                        tempVal: (node.params[pDef.id] ?? pDef.default).toString()
+                                                                    });
+                                                                } else if (pDef.type === 'bool') {
+                                                                    // Toggle bool on click of text too, why not
+                                                                    updateParam(node.id, pDef.id, node.params[pDef.id] ? 0 : 1);
+                                                                }
+                                                            }}
+                                                        >
+                                                            {pDef.type === 'bool' ? (node.params[pDef.id] ? 'ON' : 'OFF') : (node.params[pDef.id] ?? pDef.default).toFixed(pDef.type === 'int' ? 0 : 2)}
+                                                        </span>
+                                                    )}
+                                                    {pDef.type === 'bool' && !hasInput && !editingParam && (
                                                         <div
                                                             className={`w-5 h-2.5 rounded-full relative transition-colors duration-200 cursor-pointer mt-0.5 ${node.params[pDef.id] ? 'bg-indigo-500' : 'bg-slate-700'}`}
                                                             onClick={() => updateParam(node.id, pDef.id, node.params[pDef.id] ? 0 : 1)}
@@ -1097,7 +1215,33 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
                                                         disabled={hasInput}
                                                         onChange={(e) => {
                                                             const val = parseFloat(e.target.value);
-                                                            updateParam(node.id, pDef.id, pDef.type === 'int' ? Math.round(val) : val);
+                                                            let finalVal = pDef.type === 'int' ? Math.round(val) : val;
+
+                                                            // MAGNETIC SNAP FOR LFO RATE
+                                                            const isShiftHeld = (e.nativeEvent as any).shiftKey;
+                                                            if (node.type === 'lfo' && pDef.id === 'rate' && !isShiftHeld) {
+                                                                const SNAP_VALUES = [0.125, 0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0];
+                                                                // Find nearest snap
+                                                                let closest = SNAP_VALUES[0];
+                                                                let minDiff = Infinity;
+
+                                                                for (const s of SNAP_VALUES) {
+                                                                    const diff = Math.abs(val - s);
+                                                                    if (diff < minDiff) {
+                                                                        minDiff = diff;
+                                                                        closest = s;
+                                                                    }
+                                                                }
+
+                                                                // Snap threshold (e.g., within 0.5 units or so, relative to magnitude?)
+                                                                // actually, since these are log-like, a fixed threshold might be weird.
+                                                                // Let's try a simple distance check.
+                                                                if (minDiff < 0.25) {
+                                                                    finalVal = closest;
+                                                                }
+                                                            }
+
+                                                            updateParam(node.id, pDef.id, finalVal);
                                                         }}
                                                         onMouseDown={(e) => e.stopPropagation()}
                                                         className={`absolute inset-0 w-full accent-indigo-500 h-1 rounded cursor-pointer z-10 ${hasInput ? 'opacity-20 grayscale cursor-not-allowed' : 'opacity-100'}`}

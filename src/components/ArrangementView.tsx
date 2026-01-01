@@ -8,14 +8,14 @@ interface ArrangementViewProps {
     editingPatternIndex: number;
     playbackPatternIndex: number;
     queuedPatternIndex: number;
-    loopLockedPatternIndex: number;
+    trackLoops: (number[] | null)[];
     rowConfigs: RowConfig[];
     onSelectPattern: (trackIndex: number, patternIndex: number) => void;
     onInsertPattern: (index: number) => void;
     onDeletePattern: (index: number) => void;
     onDuplicatePattern: (index: number) => void;
     onQueuePattern: (index: number) => void;
-    onLoopLockPattern: (index: number) => void;
+    onTrackLoopChange: (trackIndex: number, range: number[] | null) => void;
     onAddTrack: () => void;
     isPlaying: boolean;
     isFollowMode: boolean;
@@ -30,14 +30,14 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
     editingPatternIndex,
     playbackPatternIndex,
     queuedPatternIndex,
-    loopLockedPatternIndex,
+    trackLoops,
     rowConfigs,
     onSelectPattern,
     onInsertPattern,
     onDeletePattern,
     onDuplicatePattern,
     onQueuePattern,
-    onLoopLockPattern,
+    onTrackLoopChange,
     onAddTrack,
     isPlaying,
     isFollowMode,
@@ -88,7 +88,7 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
 
             <div className="flex-1 overflow-y-auto">
                 {song.map((track, tIdx) => (
-                    <div key={tIdx} className="flex items-center p-2 border-b border-slate-800/30 last:border-0 min-w-max">
+                    <div key={tIdx} className="flex items-center p-1 border-b border-white/5 last:border-0 min-w-max hover:bg-white/[0.02] transition-colors">
                         {/* Track Header */}
                         <div className={`w-14 shrink-0 flex flex-col justify-start pt-2 pr-2 border-r border-slate-800 mr-1 ${tIdx === editingTrackIndex ? 'opacity-100' : 'opacity-40 hover:opacity-100 transition-opacity'}`}>
                             <span className={`text-[10px] font-black uppercase tracking-tighter ${tIdx === editingTrackIndex ? 'text-sky-400' : 'text-slate-500'}`}>
@@ -98,42 +98,58 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                         </div>
 
                         {/* Patterns */}
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center">
                             {track.map((pattern, pIdx) => {
                                 const isEditing = tIdx === editingTrackIndex && pIdx === editingPatternIndex;
                                 const isPlayingPattern = isPlaying && pIdx === playbackPatternIndex;
                                 const isQueued = pIdx === queuedPatternIndex;
-                                const isLocked = pIdx === loopLockedPatternIndex;
+
+                                const myLoop = trackLoops[tIdx];
+                                const isInLoop = myLoop && pIdx >= myLoop[0] && pIdx <= myLoop[1];
+                                const isLoopStart = myLoop && pIdx === myLoop[0];
+                                const isLoopEnd = myLoop && pIdx === myLoop[1];
 
                                 return (
                                     <React.Fragment key={pIdx}>
-                                        {/* Inserter (Only in the first track or somehow global? Let's show it in all for redundancy or just first) */}
+                                        {/* Inserter */}
                                         <div
-                                            className="group relative flex items-center justify-center w-6 h-16 cursor-pointer transition-all shrink-0 -mx-1 z-10"
+                                            className="group relative flex items-center justify-center w-4 h-14 cursor-pointer transition-all shrink-0 -mx-2 z-20"
                                             onClick={() => onInsertPattern(pIdx)}
                                         >
-                                            <div className="w-[1px] h-full bg-slate-800/50 group-hover:bg-sky-500/50 transition-colors" />
+                                            <div className="w-[1px] h-full bg-white/5 group-hover:bg-sky-500/50 transition-colors" />
                                             {tIdx === 0 && (
-                                                <div className="absolute w-4 h-4 bg-slate-900 rounded-full border border-slate-800 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all shadow-xl">
-                                                    <span className="text-sky-500 text-xs font-bold">+</span>
+                                                <div className="absolute w-4 h-4 bg-slate-900 rounded-full border border-slate-700 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all shadow-xl z-30">
+                                                    <span className="text-sky-500 text-[10px] font-bold">+</span>
                                                 </div>
                                             )}
                                         </div>
 
                                         <div
-                                            className={`relative flex flex-col justify-between p-2 rounded-xl border transition-all cursor-pointer w-44 h-16 shrink-0 group overflow-hidden
-                                                ${isEditing ? 'border-sky-500 bg-sky-500/10 shadow-[0_0_20px_rgba(14,165,233,0.1)]' : 'border-slate-800 bg-slate-950/40 hover:border-slate-700'}
-                                                ${isLocked ? 'ring-2 ring-amber-500/30 border-amber-500/50' : ''}
-                                                ${isQueued ? 'border-violet-500/50 shadow-[0_0_15px_rgba(167,139,250,0.1)]' : ''}
+                                            className={`relative flex flex-col justify-between p-1.5 border transition-all cursor-pointer w-40 h-14 shrink-0 group overflow-hidden
+                                                ${isEditing ? 'border-sky-500 bg-sky-500/10 shadow-[0_0_15px_rgba(14,165,233,0.1)] z-10' : 'border-white/10 bg-slate-950/40 hover:border-white/20'}
+                                                ${isInLoop ? 'border-amber-500/50 bg-amber-500/5 z-10' : ''}
+                                                ${isLoopStart ? 'border-l-amber-500' : ''}
+                                                ${isLoopEnd ? 'border-r-amber-500' : ''}
+                                                ${isQueued ? 'border-violet-500/50 shadow-[0_0_10px_rgba(167,139,250,0.1)] z-10' : ''}
+                                                ${pIdx === 0 ? 'rounded-l-xl' : ''}
+                                                ${pIdx === track.length - 1 ? 'rounded-r-xl' : ''}
                                             `}
-                                            onClick={() => onSelectPattern(tIdx, pIdx)}
+                                            onClick={(e) => {
+                                                if (e.shiftKey) {
+                                                    const start = Math.min(editingPatternIndex, pIdx);
+                                                    const end = Math.max(editingPatternIndex, pIdx);
+                                                    onTrackLoopChange(tIdx, [start, end]);
+                                                } else {
+                                                    onSelectPattern(tIdx, pIdx);
+                                                }
+                                            }}
                                             onDoubleClick={() => onQueuePattern(pIdx)}
                                             onContextMenu={(e) => {
                                                 e.preventDefault();
-                                                onLoopLockPattern(pIdx);
+                                                onTrackLoopChange(tIdx, isInLoop ? null : [pIdx, pIdx]);
                                             }}
                                         >
-                                            <div className="flex justify-between items-start">
+                                            <div className="flex justify-between items-start leading-none">
                                                 <span className={`text-[8px] font-black uppercase tracking-tighter ${isEditing ? 'text-sky-400' : 'text-slate-500'}`}>
                                                     Part {pIdx + 1}
                                                 </span>
@@ -165,7 +181,7 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                                             return '#64748b';
                                                         };
 
-                                                        const baseColor = note.rgb || getColor(rowConfigs[r].activeColor);
+                                                        const baseColor = (note.rgb || (rowConfigs[r] ? getColor(rowConfigs[r].activeColor) : '#64748b'));
 
                                                         return (
                                                             <div
@@ -188,7 +204,7 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                             <div className="flex gap-1 mt-0.5">
                                                 {isPlayingPattern && <div className="bg-emerald-500 text-white text-[6px] font-black px-1 py-0.5 rounded animate-pulse">PLAYING</div>}
                                                 {isQueued && <div className="bg-violet-500 text-white text-[6px] font-black px-1 py-0.5 rounded">NEXT</div>}
-                                                {isLocked && <div className="bg-amber-500 text-slate-900 text-[6px] font-black px-1 py-0.5 rounded">LOOP</div>}
+                                                {isInLoop && <div className="bg-amber-500 text-slate-900 text-[6px] font-black px-1 py-0.5 rounded">LOOP</div>}
                                             </div>
 
                                             {isPlayingPattern && (
@@ -204,20 +220,20 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
 
                             {/* End Inserters (Only in first track or header) */}
                             {tIdx === 0 && (
-                                <div className="flex flex-col gap-1 w-12 h-16 shrink-0 opacity-40 hover:opacity-100 transition-all ml-2">
+                                <div className="flex flex-col gap-1 w-10 h-14 shrink-0 opacity-40 hover:opacity-100 transition-all ml-4">
                                     <button
                                         onClick={() => onInsertPattern(song[0].length)}
-                                        className="flex-1 flex items-center justify-center bg-slate-950 border border-slate-800 rounded-xl hover:bg-slate-800 hover:text-sky-400 transition-all"
+                                        className="flex-1 flex items-center justify-center bg-slate-950 border border-white/10 rounded-lg hover:bg-slate-800 hover:text-sky-400 transition-all"
                                         title="Add Empty Slot"
                                     >
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14m-7-7v14" /></svg>
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14m-7-7v14" /></svg>
                                     </button>
                                     <button
                                         onClick={() => onDuplicatePattern(song[0].length - 1)}
-                                        className="flex-1 flex items-center justify-center bg-slate-950 border border-slate-800 rounded-xl hover:bg-slate-800 hover:text-sky-400 transition-all"
+                                        className="flex-1 flex items-center justify-center bg-slate-950 border border-white/10 rounded-lg hover:bg-slate-800 hover:text-sky-400 transition-all"
                                         title="Duplicate All Tracks at Last Slot"
                                     >
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
                                     </button>
                                 </div>
                             )}

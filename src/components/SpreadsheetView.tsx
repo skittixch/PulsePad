@@ -13,12 +13,14 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({ grid, rowConfi
     grid.forEach((row, rIdx) => {
         row.forEach((note, cIdx) => {
             if (note) {
-                notesInPattern.push({
-                    r: rIdx,
-                    c: cIdx,
-                    note,
-                    rowLabel: rowConfigs[rIdx].label
-                });
+                if (rowConfigs[rIdx]) {
+                    notesInPattern.push({
+                        r: rIdx,
+                        c: cIdx,
+                        note,
+                        rowLabel: rowConfigs[rIdx].label
+                    });
+                }
             }
         });
     });

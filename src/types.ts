@@ -43,7 +43,7 @@ export interface SongState {
     song: Grid[][];
     bpm: number;
     currentScale: string;
-    patternScales: string[];
+    patternScales: string[][];
     drumRows: RowConfig[];
     soundConfig: SoundConfig;
     masterGain: number;

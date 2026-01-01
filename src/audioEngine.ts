@@ -12,6 +12,7 @@ export class AudioEngine {
     lfoStartTime: number = 0;
     bpm: number = 120;
     private lastStructStr: string = "";
+    private lastParamsStr: string = "";
 
     constructor() {
         // Initialization happens on user interaction
@@ -154,8 +155,8 @@ export class AudioEngine {
         const gain = this.ctx.createGain();
         const filter = this.ctx.createBiquadFilter();
 
-        const secondsPerBeat = 60.0 / bpm / 4;
-        const durationSecs = durationSteps * secondsPerBeat;
+        const secondsPerStep = 60.0 / bpm / 4;
+        const durationSecs = durationSteps * secondsPerStep;
         const release = Math.max(0.05, Math.min(durationSecs, this.soundConfig.synth.release));
 
         osc.type = this.soundConfig.synth.type;
@@ -189,7 +190,7 @@ export class AudioEngine {
                 const freq = config.type === 'synth' ? config.freq * Math.pow(2, note.oct || 0) : config.freq;
 
                 if (config.type === 'synth') {
-                    this.createSynth(freq, time, note.d * (60 / bpm / 4), bpm, config.gain);
+                    this.createSynth(freq, time, note.d, bpm, config.gain);
                 } else if (config.type === 'kick') {
                     this.createKick(time, config.gain);
                 } else if (config.type === 'snare') {
@@ -325,8 +326,21 @@ export class AudioEngine {
             connections: graph.connections
         };
         const structStr = JSON.stringify(struct);
+        // OPTIMIZATION: Check params too.
+        // If structure AND params match, do nothing (avoids artifacts on drag when only X/Y changes).
+        const paramsStr = JSON.stringify(graph.nodes.map(n => ({ id: n.id, params: n.params })));
+
         if (this.lastStructStr === structStr) {
-            this.currentFXGraph = graph; // Update params even if structure is same
+            // Structure matched. Did params change?
+            if (this.lastParamsStr === paramsStr) {
+                // Nothing relevant changed.
+                this.currentFXGraph = graph;
+                return;
+            }
+
+            // Params changed. Update them.
+            this.lastParamsStr = paramsStr;
+            this.currentFXGraph = graph;
             graph.nodes.forEach(nData => {
                 const params = nData.params || {};
                 Object.entries(params).forEach(([pId, val]) => {
@@ -337,6 +351,7 @@ export class AudioEngine {
         }
 
         this.lastStructStr = structStr;
+        this.lastParamsStr = paramsStr;
         this.currentFXGraph = graph;
         if (!this.sequencerOutput || !this.masterGain) return;
 
