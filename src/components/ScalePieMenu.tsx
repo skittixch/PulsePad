@@ -23,7 +23,6 @@ CIRCLE_OF_FIFTHS.forEach((note, i) => {
     NOTE_ANGLES[note] = (i * 30) - 90;
 });
 
-const SCALE_TYPES = ['Maj Pent', 'Min Pent', 'Maj', 'Min', 'Blues']; // Kept for reference or future expansion
 
 export const ScalePieMenu: React.FC<ScalePieMenuProps> = ({ isOpen, mousePos, currentScale, onSelectScale, onClose }) => {
     const [hoveredNote, setHoveredNote] = useState<string | null>(null);
