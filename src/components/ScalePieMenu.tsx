@@ -5,6 +5,7 @@ interface ScalePieMenuProps {
     mousePos: { x: number, y: number };
     currentScale: string;
     onSelectScale: (scaleName: string) => void;
+    onPreviewChord: (scaleName: string, direction: 'up' | 'down') => void;
     onClose: () => void;
 }
 
@@ -15,142 +16,75 @@ const CIRCLE_OF_FIFTHS = [
 // Map standard notes to our Circle of Fifths positions
 const NOTE_ANGLES: { [key: string]: number } = {};
 CIRCLE_OF_FIFTHS.forEach((note, i) => {
-    // 0 degrees is usually East (3pm). Music circle usually puts C at Top (12pm).
-    // So C = -90 deg.
-    // Each step is 360/12 = 30 deg.
-    // Index 0 (C) -> -90
-    // Index 1 (G) -> -60
     NOTE_ANGLES[note] = (i * 30) - 90;
 });
 
 
-export const ScalePieMenu: React.FC<ScalePieMenuProps> = ({ isOpen, mousePos, currentScale, onSelectScale, onClose }) => {
+export const ScalePieMenu: React.FC<ScalePieMenuProps> = ({ isOpen, mousePos, currentScale, onSelectScale, onPreviewChord, onClose }) => {
     const [hoveredNote, setHoveredNote] = useState<string | null>(null);
     const [hoveredType, setHoveredType] = useState<string>('Maj Pent');
     const menuRef = useRef<HTMLDivElement>(null);
 
+    // Tracking for direction
+    const lastMouseState = useRef({ dist: 0, angle: 0, scaleName: '' });
+
     // Config
     const OUTER_RADIUS = 250;
-
     const LABEL_RADIUS = 180;
+
+    // Play current chord on open
+    useEffect(() => {
+        if (isOpen) {
+            onPreviewChord(currentScale, 'up');
+        }
+    }, [isOpen, onPreviewChord, currentScale]); // Play once when opening or if scale changes while open
 
     // Calculate Hover Logic
     useEffect(() => {
-        if (!isOpen) return;
+        if (!isOpen) {
+            lastMouseState.current = { dist: 0, angle: 0, scaleName: '' };
+            return;
+        }
 
         const handleMove = (e: MouseEvent) => {
             if (!menuRef.current) return;
-            // Relative to center of menu (which is centered on initial mousePos, but fixed?)
-            // Actually, usually radial menus spawn centered on mouse.
-            // But if we move mouse, we calculate angle/dist from center of MENU.
-            // So we need to store the CENTER position. 
-            // Here `mousePos` prop is the center of the menu.
-
             const dx = e.clientX - mousePos.x;
             const dy = e.clientY - mousePos.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
 
-            // Angle (-180 to 180), 0 is East.
             let angle = Math.atan2(dy, dx) * (180 / Math.PI);
-
-            // Map to our Circle indices
-            // C is at -90. so angle should be normalized relative to -90?
-            // Angle increases CW (y positive down).
-
-            // 12 segments = 30 deg each.
-            // Slice 0 (C) centers at -90. So covers -105 to -75.
-
-            // Normalize angle to 0-360 starting from -105?
-            // (angle + 105 + 360) % 360 / 30
-
-            // Let's debug: C is Top (-90). G is 1 o'clock (-60).
-            // So slice C is [-105, -75].
-            // Add 105. -> [0, 30].
-            // So index = floor((angle + 105 + 360) % 360 / 30).
-
             const segmentIdx = Math.floor(((angle + 105 + 360) % 360) / 30);
-            const note = CIRCLE_OF_FIFTHS[segmentIdx % 12];
-            setHoveredNote(note);
+            const note = dist < 60 ? null : CIRCLE_OF_FIFTHS[segmentIdx % 12];
 
-            // Distance determines Type?
-            // 3 Bands?
-            // > 140: Major / Minor (Toggle?)
-            // < 140: Pentatonic?
-            // Let's keep it simple: Just Root selection for now, 
-            // and maybe Type is selected by MODIFIERS or hovering concentric rings?
+            let type = 'Major';
+            if (dist < 100) type = 'Min Pent';
+            else if (dist < 150) type = 'Minor';
+            else type = 'Major';
 
-            // Let's implement Rings:
-            // R < 100: Pentatonic
-            // 100 < R < 160: Minor
-            // R > 160: Major
+            const scaleName = note ? `${note} ${type}` : '';
 
-            if (dist < 100) setHoveredType('Min Pent'); // Inner
-            else if (dist < 150) setHoveredType('Minor'); // Middle
-            else setHoveredType('Major'); // Outer
+            // Only trigger if scale changes
+            if (scaleName && scaleName !== lastMouseState.current.scaleName) {
+                const dDist = dist - lastMouseState.current.dist;
 
-            // Wait, Pentatonic is usually favored?
-            // Let's make:
-            // Center (Dead Zone): No Selection
-            // Ring 1 (60-120): Pentatonic
-            // Ring 2 (120-180): Natural (Maj/Min)
-            // Ring 3 (180+): Blues?
+                // Normalizing angle delta to handle -180/180 wrap
+                let dAngle = angle - lastMouseState.current.angle;
+                if (dAngle > 180) dAngle -= 360;
+                if (dAngle < -180) dAngle += 360;
 
-            if (dist < 60) {
-                setHoveredNote(null);
+                // Outward (>0) or Clockwise (>0) is 'up'
+                const direction = (dDist > 0 || dAngle > 0) ? 'up' : 'down';
+                onPreviewChord(scaleName, direction);
             }
+
+            setHoveredNote(note);
+            setHoveredType(type);
+            lastMouseState.current = { dist, angle, scaleName };
         };
 
         const handleUp = () => {
             if (hoveredNote) {
-                // Construct scale name
-                // e.g. "C Maj Pent"
-                // Or "C Maj"
-
-                // If Ring 1 (Pent):
-                // If Ring 2 (Natural):
-
-                // Wait, Minor Pentatonic vs Major Pentatonic?
-                // Usually "C Min Pent" is distinct from "C Maj Pent".
-                // Relative minor? A Min Pent == C Maj Pent.
-                // Let's stick to Root + Type.
-
-                // Logic:
-                // "Maj" or "Min" depends on... maybe click?
-                // Or maybe split rings into:
-                // Inner: Major Pent
-                // Mid: Minor Pent
-                // Outer: Major
-                // Far Outer: Minor
-
-                // This is getting complex.
-                // Blender pie menus are 2D fast.
-                // Let's default to "Maj Pent" if inner, "Min Pent" if mid, "Maj" outer?
-
-                // SIMPLIFIED ZODIAC:
-                // 12 Slices.
-                // Radial distance controls variety?
-                // Inner: Pentatonic
-                // Outer: Diatonic (7-note)
-
-                // If we hold Shift -> Minor?
-                // The user said "creative way".
-
-                // Let's try:
-                // Ring 1 (Inner): Major Pentatonic
-                // Ring 2 (Mid): Minor Pentatonic
-                // Ring 3 (Outer): Major (Diatonic)
-                // Ring 4 (Edge): Minor (Diatonic)
-
-                // Or just use the hoveredType I set above.
-                // For now:
-                // < 100: Min Pent
-                // < 150: Min
-                // > 150: Maj
-
-                let finalType = hoveredType;
-                // Hack for refinement later
-
-                onSelectScale(`${hoveredNote} ${finalType}`);
+                onSelectScale(`${hoveredNote} ${hoveredType}`);
                 onClose();
             } else {
                 onClose();
@@ -159,7 +93,6 @@ export const ScalePieMenu: React.FC<ScalePieMenuProps> = ({ isOpen, mousePos, cu
 
         window.addEventListener('mousemove', handleMove);
         window.addEventListener('mouseup', handleUp);
-        // Also listen for KeyUp of 'z'
         const handleKeyUp = (e: KeyboardEvent) => {
             if (e.key.toLowerCase() === 'z') handleUp();
         };
@@ -170,7 +103,8 @@ export const ScalePieMenu: React.FC<ScalePieMenuProps> = ({ isOpen, mousePos, cu
             window.removeEventListener('mouseup', handleUp);
             window.removeEventListener('keyup', handleKeyUp);
         };
-    }, [isOpen, mousePos, hoveredNote, hoveredType, onSelectScale, onClose]);
+    }, [isOpen, mousePos, hoveredNote, hoveredType, onSelectScale, onPreviewChord, onClose]);
+
 
     if (!isOpen) return null;
 
@@ -223,25 +157,31 @@ export const ScalePieMenu: React.FC<ScalePieMenuProps> = ({ isOpen, mousePos, cu
                         const p2y = Math.sin(endAngle) * OUTER_RADIUS;
 
                         const isHovered = note === hoveredNote;
+                        const [currentRoot] = currentScale.split(' ');
+                        const isCurrent = note === currentRoot;
 
                         return (
                             <g key={note}>
                                 <path
                                     d={`M 0 0 L ${p1x} ${p1y} A ${OUTER_RADIUS} ${OUTER_RADIUS} 0 0 1 ${p2x} ${p2y} Z`}
-                                    fill={isHovered ? '#6366f1' : 'transparent'}
-                                    fillOpacity={isHovered ? 0.2 : 0}
-                                    stroke="#818cf8"
-                                    strokeWidth={isHovered ? 2 : 0.5}
-                                    strokeOpacity={0.3}
+                                    fill={isHovered ? '#6366f1' : (isCurrent ? '#6366f1' : 'transparent')}
+                                    fillOpacity={isHovered ? 0.2 : (isCurrent ? 0.05 : 0)}
+                                    stroke={isCurrent ? '#818cf8' : '#818cf8'}
+                                    strokeWidth={isHovered ? 2 : (isCurrent ? 1.5 : 0.5)}
+                                    strokeOpacity={isHovered ? 0.6 : (isCurrent ? 0.4 : 0.3)}
                                 />
                                 {/* Label */}
                                 <g transform={`translate(${Math.cos((i * 30 - 90) * Math.PI / 180) * LABEL_RADIUS}, ${Math.sin((i * 30 - 90) * Math.PI / 180) * LABEL_RADIUS})`}>
                                     <text
                                         textAnchor="middle"
                                         dominantBaseline="middle"
-                                        fill={isHovered ? '#fff' : '#94a3b8'}
-                                        className={`text-xl font-black ${isHovered ? 'drop-shadow-[0_0_10px_rgba(255,255,255,0.8)]' : ''}`}
-                                        style={{ fontSize: isHovered ? '24px' : '16px', transition: 'all 0.1s' }}
+                                        fill={isHovered ? '#fff' : (isCurrent ? '#a5b4fc' : '#94a3b8')}
+                                        className={`text-xl font-black ${isHovered || isCurrent ? 'drop-shadow-[0_0_10px_rgba(255,255,255,0.4)]' : ''}`}
+                                        style={{
+                                            fontSize: isHovered ? '24px' : (isCurrent ? '20px' : '16px'),
+                                            transition: 'all 0.1s',
+                                            filter: isCurrent && !isHovered ? 'drop-shadow(0 0 5px rgba(129, 140, 248, 0.5))' : 'none'
+                                        }}
                                     >
                                         {note}
                                     </text>
@@ -252,9 +192,11 @@ export const ScalePieMenu: React.FC<ScalePieMenuProps> = ({ isOpen, mousePos, cu
 
                     {/* Rings Visualization (Concentric feedback) */}
                     {/* Inner Ring (Min Pent) */}
-                    <circle cx="0" cy="0" r="100" fill="none" stroke="#6366f1" strokeOpacity="0.2" strokeDasharray="4 4" />
+                    <circle cx="0" cy="0" r="100" fill="none" stroke="#6366f1" strokeOpacity={currentScale.includes('Min Pent') ? 0.5 : 0.2} strokeDasharray={currentScale.includes('Min Pent') ? "0" : "4 4"} strokeWidth={currentScale.includes('Min Pent') ? 2 : 1} />
                     {/* Middle Ring (Min) */}
-                    <circle cx="0" cy="0" r="150" fill="none" stroke="#6366f1" strokeOpacity="0.2" strokeDasharray="4 4" />
+                    <circle cx="0" cy="0" r="150" fill="none" stroke="#6366f1" strokeOpacity={currentScale.includes('Minor') && !currentScale.includes('Pent') ? 0.5 : 0.2} strokeDasharray={currentScale.includes('Minor') && !currentScale.includes('Pent') ? "0" : "4 4"} strokeWidth={currentScale.includes('Minor') && !currentScale.includes('Pent') ? 2 : 1} />
+                    {/* Outer Border for Major */}
+                    <circle cx="0" cy="0" r={OUTER_RADIUS} fill="none" stroke="#6366f1" strokeOpacity={currentScale.includes('Major') || (currentScale.includes('Maj') && !currentScale.includes('Min')) ? 0.5 : 0.2} strokeDasharray={currentScale.includes('Major') ? "0" : "4 4"} strokeWidth={currentScale.includes('Major') ? 2 : 1} />
 
                     {/* Active Selection Text in Center */}
                     <text

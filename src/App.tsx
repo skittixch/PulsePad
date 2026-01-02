@@ -4,8 +4,10 @@ import { ArrangementView } from './components/ArrangementView';
 import { SpreadsheetView } from './components/SpreadsheetView';
 import { NodalInterface } from './components/NodalInterface';
 import { ScalePieMenu } from './components/ScalePieMenu';
+import { VolumeMeter } from './components/VolumeMeter';
 import type { Note, RowConfig, Grid, FXGraph, Track, TrackPart } from './types';
-import { STEPS_PER_PATTERN, SCALES, DEFAULT_DRUM_ROWS, PRESETS, generateBlankGrid, getLabelSemitones, getRowConfigs } from './constants';
+import { STEPS_PER_PATTERN, SCALES, DEFAULT_DRUM_ROWS, generateBlankGrid, getLabelSemitones, getRowConfigs, NOTE_TO_SEMI } from './constants';
+import { DRUM_ARCHIVE } from './drumPatterns';
 import { audioEngine } from './audioEngine';
 
 
@@ -160,6 +162,7 @@ const App: React.FC = () => {
   const [trackLoops, setTrackLoops] = useState<(number[] | null)[]>([]);
   const isUnrolledRef = useRef(isUnrolled);
   const isPerformanceModeRef = useRef(isPerformanceMode);
+  const activePreviewVoiceRef = useRef<any>(null);
 
   const trackSyncStatusRef = useRef<boolean[]>([]);
   useEffect(() => { tracksRef.current = tracks; }, [tracks]);
@@ -197,6 +200,20 @@ const App: React.FC = () => {
     localStorage.setItem('pulse_song', JSON.stringify(nextTracks));
     localStorage.setItem('pulse_fx_graph', JSON.stringify(nextGraph));
   }, [tracks, fxGraph, lastCommittedGraph]);
+
+  const togglePlayback = useCallback(() => {
+    setIsPlaying(prev => {
+      const next = !prev;
+      if (next) {
+        // Reset to start of song on Play
+        setPlaybackStep(0);
+        setPlaybackPatternIndex(0);
+        playbackStepRef.current = 0;
+        playbackPatternRef.current = 0;
+      }
+      return next;
+    });
+  }, []);
 
   const handleUndo = useCallback(() => {
     if (history.length === 0) return;
@@ -240,19 +257,30 @@ const App: React.FC = () => {
     return getRowConfigs(scaleName, isUnrolled);
   }, [isUnrolled]);
 
-  const previewNote = useCallback((r: number, note?: Note, scaleName: string = currentPart.scale) => {
+  const stopPreview = useCallback(() => {
+    if (activePreviewVoiceRef.current) {
+      audioEngine.stopSynth(activePreviewVoiceRef.current);
+      activePreviewVoiceRef.current = null;
+    }
+  }, []);
+
+  const startPreview = useCallback((r: number, note?: Note, scaleName: string = currentPart.scale) => {
     audioEngine.init();
     audioEngine.resume();
+    stopPreview();
+
     const config = rowConfigs(scaleName)[r];
+    if (!config) return;
+
     const time = audioEngine.ctx!.currentTime;
     const freq = config.type === 'synth' ? config.freq * Math.pow(2, note?.oct || 0) : config.freq;
 
     if (config.type === 'synth') {
-      audioEngine.createSynth(freq, time, 0.5, bpm, config.gain);
+      activePreviewVoiceRef.current = audioEngine.triggerSynth(freq, config.gain);
     } else if (config.type === 'kick') audioEngine.createKick(time, config.gain);
     else if (config.type === 'snare') audioEngine.createSnare(time, config.gain);
     else if (config.type === 'hat') audioEngine.createHiHat(time, config.gain);
-  }, [rowConfigs, bpm, currentPart.scale]);
+  }, [rowConfigs, currentPart.scale, stopPreview]);
 
   const addNote = (r: number, c: number, d: number = 1, data?: Partial<Note>) => {
     const newTracks = [...tracks];
@@ -269,7 +297,6 @@ const App: React.FC = () => {
     track.parts = parts;
     newTracks[editingTrackIndex] = track;
     commitToHistory(newTracks);
-    previewNote(r, note);
   };
 
   const toggleNote = (r: number, c: number) => {
@@ -281,10 +308,10 @@ const App: React.FC = () => {
     const row = [...grid[r]];
     if (row[c]) {
       row[c] = null;
+      setSelectedNotes(prev => prev.filter(sn => !(sn.r === r && sn.c === c)));
     } else {
       const note = { d: 1, o: 0 };
       row[c] = note;
-      previewNote(r, note);
     }
     grid[r] = row;
     part.grid = grid;
@@ -294,51 +321,60 @@ const App: React.FC = () => {
     commitToHistory(newTracks);
   };
 
-  const insertPattern = (atIndex: number) => {
-    const newTracks = tracks.map(track => {
-      const newPart: TrackPart = {
-        grid: generateBlankGrid(getRowConfigs(track.parts[atIndex]?.scale || 'C Maj Pent', isUnrolled).length),
-        scale: track.parts[atIndex]?.scale || 'C Maj Pent'
-      };
-      const nextParts = [...track.parts];
-      nextParts.splice(atIndex + 1, 0, newPart);
-      return { ...track, parts: nextParts };
-    });
+  const insertPattern = (trackIdx: number, atIndex: number) => {
+    const newTracks = [...tracks];
+    const track = { ...newTracks[trackIdx] };
+    const neighborScale = track.parts[atIndex]?.scale || track.parts[atIndex - 1]?.scale || 'C Maj Pent';
+    const newPart: TrackPart = {
+      grid: generateBlankGrid(getRowConfigs(neighborScale, isUnrolled).length),
+      scale: neighborScale
+    };
+    const nextParts = [...track.parts];
+    nextParts.splice(atIndex + 1, 0, newPart);
+    track.parts = nextParts;
+    newTracks[trackIdx] = track;
+    commitToHistory(newTracks);
+    setEditingTrackIndex(trackIdx);
+    setEditingPatternIndex(atIndex + 1);
+  };
+
+  const deletePattern = (trackIdx: number, patIndex: number) => {
+    const newTracks = [...tracks];
+    const track = { ...newTracks[trackIdx] };
+    if (track.parts.length <= 1) return;
+    const nextParts = [...track.parts];
+    nextParts.splice(patIndex, 1);
+    track.parts = nextParts;
+    newTracks[trackIdx] = track;
     commitToHistory(newTracks);
   };
 
-  const deletePattern = (index: number) => {
-    const newTracks = tracks.map(track => {
-      if (track.parts.length <= 1) return track;
-      const nextParts = [...track.parts];
-      nextParts.splice(index, 1);
-      return { ...track, parts: nextParts };
-    });
+  const duplicatePattern = (trackIdx: number, patIndex: number) => {
+    const newTracks = [...tracks];
+    const track = { ...newTracks[trackIdx] };
+    const sourcePart = track.parts[patIndex];
+    const newPart: TrackPart = {
+      grid: sourcePart.grid.map(row => [...row]),
+      scale: sourcePart.scale
+    };
+    const nextParts = [...track.parts];
+    nextParts.splice(patIndex + 1, 0, newPart);
+    track.parts = nextParts;
+    newTracks[trackIdx] = track;
     commitToHistory(newTracks);
-  };
-
-  const duplicatePattern = (index: number) => {
-    const newTracks = tracks.map(track => {
-      const sourcePart = track.parts[index];
-      const newPart: TrackPart = {
-        grid: sourcePart.grid.map(row => [...row]),
-        scale: sourcePart.scale
-      };
-      const nextParts = [...track.parts];
-      nextParts.splice(index + 1, 0, newPart);
-      return { ...track, parts: nextParts };
-    });
-    commitToHistory(newTracks);
+    setEditingTrackIndex(trackIdx);
+    setEditingPatternIndex(patIndex + 1);
   };
 
   const addTrack = () => {
+    const currentScale = tracks[editingTrackIndex]?.parts[editingPatternIndex]?.scale || 'C Maj Pent';
     const newTrack: Track = {
       id: `track-${tracks.length}-${Math.random().toString(36).substr(2, 9)}`,
       name: `Track ${tracks.length + 1}`,
       parts: [
         {
-          grid: generateBlankGrid(getRowConfigs('C Maj Pent', isUnrolled).length),
-          scale: 'C Maj Pent'
+          grid: generateBlankGrid(getRowConfigs(currentScale, isUnrolled).length),
+          scale: currentScale
         }
       ],
       isLooping: true,
@@ -346,7 +382,22 @@ const App: React.FC = () => {
       muted: false,
       soloed: false
     };
-    commitToHistory([...tracks, newTrack]);
+    const nextTracks = [...tracks, newTrack];
+    commitToHistory(nextTracks);
+    setEditingTrackIndex(nextTracks.length - 1);
+    setEditingPatternIndex(0);
+  };
+
+  const toggleMute = (trackIdx: number) => {
+    const next = [...tracks];
+    next[trackIdx] = { ...next[trackIdx], muted: !next[trackIdx].muted };
+    commitToHistory(next);
+  };
+
+  const toggleSolo = (trackIdx: number) => {
+    const next = [...tracks];
+    next[trackIdx] = { ...next[trackIdx], soloed: !next[trackIdx].soloed };
+    commitToHistory(next);
   };
 
   const handleCommitMultiNote = useCallback((notes: { fromR: number, fromC: number, toR: number, toC: number, data: Partial<Note> }[]) => {
@@ -430,8 +481,7 @@ const App: React.FC = () => {
     newTracks[editingTrackIndex] = track;
 
     commitToHistory(newTracks);
-    previewNote(toR, { ...data, d: data.d || 1, o: data.o || 0 });
-  }, [editingTrackIndex, editingPatternIndex, tracks, commitToHistory, previewNote]);
+  }, [editingTrackIndex, editingPatternIndex, tracks, commitToHistory]);
 
   const handleUpdateNote = useCallback((r: number, c: number, data: Partial<Note>) => {
     const newTracks = [...tracks];
@@ -453,9 +503,9 @@ const App: React.FC = () => {
   }, [editingTrackIndex, editingPatternIndex, tracks, commitToHistory]);
 
   const handleRemix = () => {
-    const keys = Object.keys(PRESETS);
+    const keys = Object.keys(DRUM_ARCHIVE);
     const style = keys[Math.floor(Math.random() * keys.length)];
-    const preset = PRESETS[style];
+    const preset = DRUM_ARCHIVE[style];
     const newGrid = generateBlankGrid(rowConfigs(currentPart.scale).length);
     const hatRow = newGrid.length - 3;
     const snareRow = newGrid.length - 2;
@@ -481,7 +531,10 @@ const App: React.FC = () => {
     track.parts = parts;
     newTracks[editingTrackIndex] = track;
     commitToHistory(newTracks);
-    setToast({ message: `Style: ${style}`, visible: true });
+
+    // Clean up label for display
+    const displayStyle = style.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+    setToast({ message: `Pattern: ${displayStyle}`, visible: true });
   };
 
   const handleCopy = useCallback(() => {
@@ -642,6 +695,25 @@ const App: React.FC = () => {
     audioEngine.init();
   }, [resetArmed, isUnrolled, commitToHistory]);
 
+  const handlePreviewChord = useCallback((scaleName: string, direction: 'up' | 'down') => {
+    audioEngine.init();
+    audioEngine.resume();
+    const isMajor = scaleName.toLowerCase().includes('major') || scaleName.toLowerCase().includes('maj');
+    const intervals = isMajor ? [0, 4, 7, 12] : [0, 3, 7, 12];
+
+    // Extract root from scaleName (e.g. "C# Maj Pent" -> "C#")
+    const rootNote = scaleName.split(' ')[0];
+    const rootSemi = (NOTE_TO_SEMI[rootNote] || 0) + 36; // C4 base
+
+    const notes = direction === 'up' ? intervals : [...intervals].reverse();
+
+    notes.forEach((offset, i) => {
+      const time = audioEngine.ctx!.currentTime + (i * 0.005);
+      const freq = 440 * Math.pow(2, ((rootSemi + offset + 12) - 57) / 12);
+      audioEngine.createSynth(freq, time, 0.4, bpm, 0.4);
+    });
+  }, [bpm]);
+
   useEffect(() => {
     if (toast.visible) {
       const timer = setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 2000);
@@ -709,28 +781,30 @@ const App: React.FC = () => {
             queuedPatternRef.current = -1;
             setQueuedPatternIndex(-1);
           } else {
-            const maxParts = Math.max(...currentTracks.map(t => t.parts.length), 1);
-            if (isPerformanceModeRef.current && globalPattern === maxParts - 1) {
-              // Auto-duplicate last part for all tracks to keep the performance going
+            if (isPerformanceModeRef.current) {
+              // Auto-duplicate last part ONLY for the editing track to keep recording
               setTimeout(() => {
                 setTracks(prev => {
-                  const next = prev.map(track => {
-                    const lastPart = track.parts[track.parts.length - 1];
-                    const newPart: TrackPart = {
-                      grid: lastPart.grid.map(row => [...row]),
-                      scale: lastPart.scale
-                    };
-                    return { ...track, parts: [...track.parts, newPart] };
-                  });
+                  const next = [...prev];
+                  const track = { ...next[editingTrackIndex] };
+                  const lastPart = track.parts[track.parts.length - 1];
+                  const newPart: TrackPart = {
+                    grid: lastPart.grid.map(row => [...row]),
+                    scale: lastPart.scale
+                  };
+                  track.parts = [...track.parts, newPart];
+                  next[editingTrackIndex] = track;
                   return next;
                 });
               }, 0);
               nextPattern = globalPattern + 1;
             } else {
-              nextPattern = (globalPattern + 1) % maxParts;
+              // Now we just increment the global pattern indefinitely. 
+              // Each track loops itself via partIdx = globalPattern % track.parts.length
+              nextPattern = globalPattern + 1;
             }
           }
-          if (isFollowModeRef.current) setEditingPatternIndex(nextPattern);
+          if (isFollowModeRef.current) setEditingPatternIndex(nextPattern % (tracksRef.current[editingTrackIndex]?.parts.length || 1));
           playbackPatternRef.current = nextPattern;
           setPlaybackPatternIndex(nextPattern);
         }
@@ -836,7 +910,7 @@ const App: React.FC = () => {
       if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) { e.preventDefault(); handleRedo(); }
       if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
         e.preventDefault();
-        duplicatePattern(editingPatternIndex);
+        duplicatePattern(editingTrackIndex, editingPatternIndex);
         setToast({ message: "Pattern Duplicated", visible: true });
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
@@ -849,7 +923,7 @@ const App: React.FC = () => {
       }
       if (e.code === 'Space' && (e.target as HTMLElement).tagName !== 'INPUT' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
         e.preventDefault();
-        setIsPlaying(prev => !prev);
+        togglePlayback();
       }
 
       // Z Key for Radial Menu (Hold)
@@ -973,10 +1047,7 @@ const App: React.FC = () => {
 
           <div className="flex items-center gap-2 border-r border-slate-700 pr-3 mr-1">
             <button
-              onClick={() => {
-                const newIsPlaying = !isPlaying;
-                setIsPlaying(newIsPlaying);
-              }}
+              onClick={() => togglePlayback()}
               className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-black text-xs tracking-widest transition-all ${isPlaying ? 'bg-rose-500 text-white' : 'bg-emerald-500 text-white'}`}
             >
               {isPlaying ? 'STOP' : 'START'}
@@ -1020,7 +1091,29 @@ const App: React.FC = () => {
       </header>
 
       <main className="flex-1 w-full flex flex-col gap-2 overflow-hidden pb-2">
-        <section className="flex-1 bg-slate-900/40 rounded-xl p-2 border border-white/5 backdrop-blur-3xl shadow-2xl relative overflow-hidden flex flex-col min-h-0">
+        <section className="flex-1 bg-slate-900/40 rounded-xl border border-white/5 backdrop-blur-3xl shadow-2xl relative overflow-hidden flex flex-col min-h-0">
+          <div className="p-1 px-3 border-b border-slate-800/60 flex justify-between items-center shrink-0">
+            <h3 className="text-slate-400 uppercase tracking-[0.2em] text-[10px] font-black flex items-center gap-2">
+              {viewMode === 'sequencer' && (
+                <>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20v-6M6 20V10M18 20V4" /></svg>
+                  Composition
+                </>
+              )}
+              {viewMode === 'node' && (
+                <>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
+                  FX Chain
+                </>
+              )}
+              {viewMode === 'spreadsheet' && (
+                <>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="3" y1="9" x2="21" y2="9" /><line x1="3" y1="15" x2="21" y2="15" /><line x1="9" y1="3" x2="9" y2="21" /><line x1="15" y1="3" x2="15" y2="21" /></svg>
+                  Logic Data
+                </>
+              )}
+            </h3>
+          </div>
           <div className="flex-1 min-h-0 bg-slate-900 overflow-hidden relative">
             {viewMode === 'sequencer' && (
               <CanvasSequencer
@@ -1031,10 +1124,11 @@ const App: React.FC = () => {
                 onCommitNote={handleCommitNote}
                 onCommitMultiNote={handleCommitMultiNote}
                 onCopyMultiNote={handleCopyMultiNote}
-                onPreviewNote={(r, note) => previewNote(r, note, currentPart.scale)}
+                onPreviewNote={(r, note) => startPreview(r, note, currentPart.scale)}
+                onStopPreviewNote={stopPreview}
                 onSelectNotes={setSelectedNotes}
                 selectedNotes={selectedNotes}
-                playbackStep={playbackPatternIndex === editingPatternIndex ? playbackStep : -1}
+                playbackStep={(playbackPatternIndex % currentTrack.parts.length) === editingPatternIndex ? playbackStep : -1}
                 isPlaying={isPlaying}
                 snap={snap}
                 isUnrolled={isUnrolled}
@@ -1077,38 +1171,43 @@ const App: React.FC = () => {
                 <div className="w-1 h-1 bg-slate-600 rounded-full" />
               </div>
             </div>
-            <div className="shrink-0 transition-shadow duration-300" style={{ height: `${arrHeight}px` }}>
-              <ArrangementView
-                tracks={tracks}
-                editingTrackIndex={editingTrackIndex}
-                editingPatternIndex={editingPatternIndex}
-                playbackPatternIndex={playbackPatternIndex}
-                queuedPatternIndex={queuedPatternIndex}
-                trackLoops={trackLoops}
-                onSelectPattern={(trackIdx, patIdx) => {
-                  setEditingTrackIndex(trackIdx);
-                  setEditingPatternIndex(patIdx);
-                }}
-                onInsertPattern={insertPattern}
-                onDeletePattern={deletePattern}
-                onAddTrack={addTrack}
-                onDuplicatePattern={duplicatePattern}
-                onQueuePattern={setQueuedPatternIndex}
-                onTrackLoopChange={(trackIdx, range) => {
-                  setTrackLoops((prev: (number[] | null)[]) => {
-                    const next = [...prev];
-                    next[trackIdx] = range;
-                    return next;
-                  });
-                }}
-                isPlaying={isPlaying}
-                isFollowMode={isFollowMode}
-                onToggleFollow={setIsFollowMode}
-                bpm={bpm}
-                playbackStep={playbackStep}
-                isPerformanceMode={isPerformanceMode}
-                onSetPerformanceMode={setIsPerformanceMode}
-              />
+            <div className="flex flex-row overflow-hidden bg-slate-900 shadow-2xl border-t border-slate-800" style={{ height: `${arrHeight}px` }}>
+              <div className="flex-grow min-w-0 transition-shadow duration-300">
+                <ArrangementView
+                  tracks={tracks}
+                  editingTrackIndex={editingTrackIndex}
+                  editingPatternIndex={editingPatternIndex}
+                  playbackPatternIndex={playbackPatternIndex}
+                  queuedPatternIndex={queuedPatternIndex}
+                  trackLoops={trackLoops}
+                  onSelectPattern={(trackIdx, patIdx) => {
+                    setEditingTrackIndex(trackIdx);
+                    setEditingPatternIndex(patIdx);
+                  }}
+                  onInsertPattern={insertPattern}
+                  onDeletePattern={deletePattern}
+                  onAddTrack={addTrack}
+                  onDuplicatePattern={duplicatePattern}
+                  onQueuePattern={setQueuedPatternIndex}
+                  onToggleMute={toggleMute}
+                  onToggleSolo={toggleSolo}
+                  onTrackLoopChange={(trackIdx, range) => {
+                    setTrackLoops((prev: (number[] | null)[]) => {
+                      const next = [...prev];
+                      next[trackIdx] = range;
+                      return next;
+                    });
+                  }}
+                  isPlaying={isPlaying}
+                  isFollowMode={isFollowMode}
+                  onToggleFollow={setIsFollowMode}
+                  bpm={bpm}
+                  playbackStep={playbackStep}
+                  isPerformanceMode={isPerformanceMode}
+                  onSetPerformanceMode={setIsPerformanceMode}
+                />
+              </div>
+              <VolumeMeter />
             </div>
           </>
         )}
@@ -1129,6 +1228,7 @@ const App: React.FC = () => {
           setIsPieMenuOpen(false);
           changePatternScale(editingTrackIndex, editingPatternIndex, newScale);
         }}
+        onPreviewChord={handlePreviewChord}
         onClose={() => setIsPieMenuOpen(false)}
       />
     </div>

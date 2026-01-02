@@ -1,5 +1,5 @@
 import React from 'react';
-import type { RowConfig, Track, TrackPart } from '../types';
+import type { Track } from '../types';
 import { STEPS_PER_PATTERN, getRowConfigs } from '../constants';
 
 interface ArrangementViewProps {
@@ -10,15 +10,17 @@ interface ArrangementViewProps {
     queuedPatternIndex: number;
     trackLoops: (number[] | null)[];
     onSelectPattern: (trackIndex: number, patternIndex: number) => void;
-    onInsertPattern: (index: number) => void;
-    onDeletePattern: (index: number) => void;
-    onDuplicatePattern: (index: number) => void;
+    onInsertPattern: (trackIndex: number, index: number) => void;
+    onDeletePattern: (trackIndex: number, index: number) => void;
+    onDuplicatePattern: (trackIndex: number, index: number) => void;
     onQueuePattern: (index: number) => void;
     onTrackLoopChange: (trackIndex: number, range: number[] | null) => void;
     onAddTrack: () => void;
     isPlaying: boolean;
     isFollowMode: boolean;
     onToggleFollow: (val: boolean) => void;
+    onToggleMute: (trackIdx: number) => void;
+    onToggleSolo: (trackIdx: number) => void;
     bpm: number;
     playbackStep: number;
     isPerformanceMode: boolean;
@@ -42,6 +44,8 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
     isPlaying,
     isFollowMode,
     onToggleFollow,
+    onToggleMute,
+    onToggleSolo,
     bpm,
     playbackStep,
     isPerformanceMode,
@@ -58,8 +62,8 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
     const currentSeconds = (playbackPatternIndex * STEPS_PER_PATTERN + playbackStep) * (60.0 / bpm / 4);
 
     return (
-        <div className="w-full h-full bg-slate-900/40 rounded-2xl border border-slate-800/60 p-0.5 flex flex-col backdrop-blur-xl shrink-0 overflow-hidden">
-            <div className="p-2 px-4 border-b border-slate-800/60 flex justify-between items-center shrink-0">
+        <div className="w-full h-full bg-slate-900/40 rounded-xl border border-slate-800/60 p-0 flex flex-col backdrop-blur-xl shrink-0 overflow-hidden">
+            <div className="p-1 px-3 border-b border-slate-800/60 flex justify-between items-center shrink-0">
                 <div className="flex items-center gap-4">
                     <h3 className="text-slate-400 uppercase tracking-[0.2em] text-[10px] font-black flex items-center gap-2">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
@@ -105,14 +109,31 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                 {tracks.map((track, tIdx) => (
                     <div key={track.id} className="flex items-center p-1 border-b border-white/5 last:border-0 min-w-max hover:bg-white/[0.02] transition-colors relative">
                         {/* Track Header */}
-                        <div className={`w-28 shrink-0 flex flex-col justify-start p-2 border-r border-slate-800 mr-1 ${tIdx === editingTrackIndex ? 'opacity-100' : 'opacity-60 hover:opacity-100 transition-opacity'}`}>
+                        <div
+                            className={`w-20 shrink-0 flex flex-col justify-start p-1.5 border-r border-slate-800 mr-1 cursor-context-menu ${tIdx === editingTrackIndex ? 'opacity-100' : 'opacity-60 hover:opacity-100 transition-opacity'}`}
+                            onContextMenu={(e) => {
+                                e.preventDefault();
+                                onTrackLoopChange(tIdx, null);
+                            }}
+                            title="Right-click to clear loop"
+                        >
                             <div className="flex justify-between items-center mb-1">
                                 <span className={`text-[10px] font-black uppercase tracking-tighter ${tIdx === editingTrackIndex ? 'text-sky-400' : 'text-slate-500'}`}>
                                     {track.name}
                                 </span>
                                 <div className="flex gap-1">
-                                    <button className={`w-4 h-4 rounded text-[8px] font-bold flex items-center justify-center border ${track.muted ? 'bg-rose-500 border-rose-400 text-white' : 'bg-slate-800 border-slate-700 text-slate-500'}`}>M</button>
-                                    <button className={`w-4 h-4 rounded text-[8px] font-bold flex items-center justify-center border ${track.soloed ? 'bg-amber-500 border-amber-400 text-white' : 'bg-slate-800 border-slate-700 text-slate-500'}`}>S</button>
+                                    <button
+                                        onClick={() => onToggleMute(tIdx)}
+                                        className={`w-4 h-4 rounded text-[8px] font-bold flex items-center justify-center border transition-all ${track.muted ? 'bg-rose-500 border-rose-400 text-white shadow-[0_0_10px_rgba(244,63,94,0.3)]' : 'bg-slate-800 border-slate-700 text-slate-500 hover:text-slate-300'}`}
+                                    >
+                                        M
+                                    </button>
+                                    <button
+                                        onClick={() => onToggleSolo(tIdx)}
+                                        className={`w-4 h-4 rounded text-[8px] font-bold flex items-center justify-center border transition-all ${track.soloed ? 'bg-amber-500 border-amber-400 text-white shadow-[0_0_10px_rgba(245,158,11,0.3)]' : 'bg-slate-800 border-slate-700 text-slate-500 hover:text-slate-300'}`}
+                                    >
+                                        S
+                                    </button>
                                 </div>
                             </div>
                             <div className={`h-[1px] w-full mt-1.5 rounded-full ${tIdx === editingTrackIndex ? 'bg-sky-500/50' : 'bg-slate-800'}`} />
@@ -122,28 +143,37 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                         <div className="flex items-center">
                             {track.parts.map((part, pIdx) => {
                                 const isEditing = tIdx === editingTrackIndex && pIdx === editingPatternIndex;
-                                const isPlayingPattern = isPlaying && pIdx === playbackPatternIndex;
-                                const isQueued = pIdx === queuedPatternIndex;
-
                                 const myLoop = trackLoops[tIdx];
                                 const isInLoop = myLoop && pIdx >= myLoop[0] && pIdx <= myLoop[1];
                                 const isLoopStart = myLoop && pIdx === myLoop[0];
                                 const isLoopEnd = myLoop && pIdx === myLoop[1];
+
+                                let activePartIdx = playbackPatternIndex;
+                                if (myLoop) {
+                                    const [start, end] = myLoop;
+                                    const loopLen = (end - start) + 1;
+                                    activePartIdx = start + (playbackPatternIndex % loopLen);
+                                } else {
+                                    activePartIdx = playbackPatternIndex % track.parts.length;
+                                }
+                                const isPlayingPattern = isPlaying && pIdx === activePartIdx;
+                                const isQueued = pIdx === queuedPatternIndex;
 
                                 const configs = getRowConfigs(part.scale, false);
 
                                 return (
                                     <React.Fragment key={pIdx}>
                                         <div
-                                            className={`relative flex flex-col justify-between p-1.5 border transition-all cursor-pointer w-44 h-16 shrink-0 group overflow-hidden mr-1 mt-1 mb-1
+                                            className={`relative flex flex-col justify-between p-1 border transition-all cursor-pointer w-32 h-12 shrink-0 group overflow-hidden mr-1 mt-1 mb-1
                                                 ${isEditing ? 'border-sky-500 bg-sky-500/10 shadow-[0_0_15px_rgba(14,165,233,0.1)] z-10' : 'border-white/10 bg-slate-950/40 hover:border-white/20'}
                                                 ${isInLoop ? 'border-amber-500/50 bg-amber-500/5 z-10' : ''}
                                                 ${isLoopStart ? 'border-l-amber-500' : ''}
                                                 ${isLoopEnd ? 'border-r-amber-500' : ''}
                                                 ${isQueued ? 'border-violet-500/50 shadow-[0_0_10px_rgba(167,139,250,0.1)] z-10' : ''}
-                                                rounded-xl
+                                                rounded-lg
                                             `}
                                             onClick={(e) => {
+                                                onToggleFollow(false);
                                                 if (e.shiftKey) {
                                                     const start = Math.min(editingPatternIndex, pIdx);
                                                     const end = Math.max(editingPatternIndex, pIdx);
@@ -152,9 +182,16 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                                     onSelectPattern(tIdx, pIdx);
                                                 }
                                             }}
+                                            onMouseDown={(e) => {
+                                                if (e.button === 1) { // Middle Click
+                                                    e.preventDefault();
+                                                    onDeletePattern(tIdx, pIdx);
+                                                }
+                                            }}
                                             onDoubleClick={() => onQueuePattern(pIdx)}
                                             onContextMenu={(e) => {
                                                 e.preventDefault();
+                                                // If already in loop, clear it. Otherwise, set it.
                                                 onTrackLoopChange(tIdx, isInLoop ? null : [pIdx, pIdx]);
                                             }}
                                         >
@@ -168,7 +205,7 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                                 <button
                                                     onClick={(e) => {
                                                         e.stopPropagation();
-                                                        onDeletePattern(pIdx);
+                                                        onDeletePattern(tIdx, pIdx);
                                                     }}
                                                     className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-slate-800 rounded text-slate-500 hover:text-rose-500 transition-all font-bold text-[10px]"
                                                 >
@@ -176,7 +213,7 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                                 </button>
                                             </div>
 
-                                            <div className="relative h-7 w-full bg-black/40 rounded-lg overflow-hidden border border-white/5 pointer-events-none">
+                                            <div className="relative h-5 w-full bg-black/40 rounded-md overflow-hidden border border-white/5 pointer-events-none">
                                                 {part.grid.map((row, r) =>
                                                     row.map((note, c) => {
                                                         if (!note) return null;
@@ -224,14 +261,14 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
 
                             <div className="flex gap-2 ml-4">
                                 <button
-                                    onClick={() => onInsertPattern(track.parts.length)}
+                                    onClick={() => onInsertPattern(tIdx, track.parts.length)}
                                     className="w-10 h-10 flex items-center justify-center bg-slate-950/40 border border-white/10 rounded-xl hover:bg-slate-800 hover:text-sky-400 transition-all text-slate-600"
                                     title="Add Empty Part"
                                 >
                                     <span className="text-lg font-bold">+</span>
                                 </button>
                                 <button
-                                    onClick={() => onDuplicatePattern(track.parts.length - 1)}
+                                    onClick={() => onDuplicatePattern(tIdx, track.parts.length - 1)}
                                     className="w-10 h-10 flex items-center justify-center bg-slate-950/40 border border-white/10 rounded-xl hover:bg-slate-800 hover:text-sky-400 transition-all text-slate-600"
                                     title="Duplicate Last Part"
                                 >
@@ -242,17 +279,16 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                     </div>
                 ))}
 
-                {/* Add Track Button */}
-                <div className="p-4 flex">
+                {/* Add Track Hover Zone */}
+                <div className="relative group/add-track h-8 -mt-2">
                     <button
                         onClick={onAddTrack}
-                        className="flex items-center gap-3 px-6 py-3 rounded-2xl bg-slate-900 border border-slate-800 hover:border-sky-500/50 hover:bg-slate-800 transition-all group shadow-xl"
+                        className="absolute left-1/2 -translate-x-1/2 top-0 -translate-y-1/2 w-8 h-8 rounded-full bg-slate-900 border border-slate-700 text-sky-500 shadow-2xl opacity-0 group-hover/add-track:opacity-100 flex items-center justify-center transition-all hover:scale-110 hover:bg-sky-500 hover:text-white z-20"
+                        title="Add New Track"
                     >
-                        <div className="w-6 h-6 rounded-full bg-sky-500/10 border border-sky-500/20 flex items-center justify-center group-hover:scale-110 transition-transform">
-                            <span className="text-sky-500 font-bold">+</span>
-                        </div>
-                        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 group-hover:text-sky-400 transition-colors">New Layer Track</span>
+                        <span className="text-xl font-bold leading-none">+</span>
                     </button>
+                    <div className="absolute inset-x-0 top-0 h-px bg-transparent group-hover/add-track:bg-sky-500/20 transition-colors" />
                 </div>
             </div>
         </div>

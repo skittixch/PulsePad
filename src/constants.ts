@@ -1,13 +1,5 @@
 export const STEPS_PER_PATTERN = 16;
 
-export const PRESETS: Record<string, { kick?: number[], snare?: number[], hat?: number[], bass?: number[], chord?: number[] }> = {
-    "simple": { kick: [0, 8], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14] },
-    "techno": { kick: [0, 4, 8, 12], snare: [4, 12], hat: [2, 6, 10, 14], bass: [0, 2, 4, 6, 8, 10, 12, 14] },
-    "house": { kick: [0, 4, 8, 12], snare: [4, 12], hat: [2, 6, 10, 14], chord: [0, 3, 6, 9] },
-    "hip hop": { kick: [0, 6, 8], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14] },
-    "trap": { kick: [0, 8], snare: [8], hat: [0, 1, 2, 4, 5, 6, 8, 9, 10] },
-    "rock": { kick: [0, 8, 14], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14] }
-};
 
 export const FREQS: Record<string, number> = {};
 export const NOTES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];

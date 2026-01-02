@@ -4,6 +4,7 @@ import { DEFAULT_SOUND_CONFIG } from './constants';
 export class AudioEngine {
     ctx: AudioContext | null = null;
     masterGain: GainNode | null = null;
+    analyser: AnalyserNode | null = null;
     sequencerOutput: GainNode | null = null;
     soundConfig: SoundConfig = { ...DEFAULT_SOUND_CONFIG };
     activeFXNodes: Map<string, any> = new Map();
@@ -24,7 +25,11 @@ export class AudioEngine {
         if (this.ctx) return;
         this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
         this.masterGain = this.ctx.createGain();
-        this.masterGain.connect(this.ctx.destination);
+        this.analyser = this.ctx.createAnalyser();
+        this.analyser.fftSize = 256;
+
+        this.masterGain.connect(this.analyser);
+        this.analyser.connect(this.ctx.destination);
 
         this.sequencerOutput = this.ctx.createGain();
         // Default connection
@@ -150,14 +155,23 @@ export class AudioEngine {
     }
 
     createSynth(freq: number, time: number, durationSteps = 1, bpm: number, rowGain = 0.8) {
-        if (!this.ctx || !this.sequencerOutput) return;
+        const secondsPerStep = 60.0 / bpm / 4;
+        const durationSecs = durationSteps * secondsPerStep;
+        const voice = this.triggerSynth(freq, rowGain, time);
+        if (!voice) return;
+
+        const release = Math.max(0.05, Math.min(durationSecs, this.soundConfig.synth.release));
+        voice.gain.gain.setValueAtTime(0.1 * rowGain, time + durationSecs - 0.01);
+        voice.gain.gain.exponentialRampToValueAtTime(0.01, time + durationSecs + release);
+        voice.osc.stop(time + durationSecs + release + 0.1);
+    }
+
+    triggerSynth(freq: number, rowGain = 0.8, startTime?: number): any {
+        if (!this.ctx || !this.sequencerOutput) return null;
+        const time = startTime || this.ctx.currentTime;
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
         const filter = this.ctx.createBiquadFilter();
-
-        const secondsPerStep = 60.0 / bpm / 4;
-        const durationSecs = durationSteps * secondsPerStep;
-        const release = Math.max(0.05, Math.min(durationSecs, this.soundConfig.synth.release));
 
         osc.type = this.soundConfig.synth.type;
         osc.frequency.setValueAtTime(freq, time);
@@ -171,11 +185,23 @@ export class AudioEngine {
 
         gain.gain.setValueAtTime(0, time);
         gain.gain.linearRampToValueAtTime(0.1 * rowGain, time + 0.01);
-        gain.gain.setValueAtTime(0.1 * rowGain, time + durationSecs - 0.01);
-        gain.gain.exponentialRampToValueAtTime(0.01, time + durationSecs + release);
 
         osc.start(time);
-        osc.stop(time + durationSecs + release + 0.1);
+        return { osc, gain, filter };
+    }
+
+    stopSynth(voice: any) {
+        if (!this.ctx || !voice) return;
+        const time = this.ctx.currentTime;
+        const release = this.soundConfig.synth.release;
+        try {
+            voice.gain.gain.cancelScheduledValues(time);
+            voice.gain.gain.setValueAtTime(voice.gain.gain.value, time);
+            voice.gain.gain.exponentialRampToValueAtTime(0.001, time + release);
+            voice.osc.stop(time + release + 0.1);
+        } catch (e) {
+            // Node might already be stopped
+        }
     }
 
     playStep(grid: Grid, stepIndex: number, time: number, configs: RowConfig[], bpm: number, trackGain: number = 1.0) {
@@ -192,12 +218,23 @@ export class AudioEngine {
 
                 if (config.type === 'synth') {
                     this.createSynth(freq, time, note.d, bpm, finalGain);
-                } else if (config.type === 'kick') {
-                    this.createKick(time, finalGain);
-                } else if (config.type === 'snare') {
-                    this.createSnare(time, finalGain);
-                } else if (config.type === 'hat') {
-                    this.createHiHat(time, finalGain);
+                } else if (config.type === 'kick' || config.type === 'snare' || config.type === 'hat') {
+                    if (note.d > 1) {
+                        const totalHits = note.d * 2;
+                        const subtickSecs = (60 / bpm / 4) / 2;
+                        for (let i = 0; i < totalHits; i++) {
+                            const hitTime = time + (i * subtickSecs);
+                            const velocity = 0.7 + (i / (totalHits - 1)) * 0.3;
+                            const hitGain = finalGain * velocity;
+                            if (config.type === 'kick') this.createKick(hitTime, hitGain);
+                            else if (config.type === 'snare') this.createSnare(hitTime, hitGain);
+                            else if (config.type === 'hat') this.createHiHat(hitTime, hitGain);
+                        }
+                    } else {
+                        if (config.type === 'kick') this.createKick(time, finalGain);
+                        else if (config.type === 'snare') this.createSnare(time, finalGain);
+                        else if (config.type === 'hat') this.createHiHat(time, finalGain);
+                    }
                 }
 
                 // Color tracking
