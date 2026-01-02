@@ -52,6 +52,7 @@ export interface Track {
     volume: number;
     muted: boolean;
     soloed: boolean;
+    instrument: SoundConfig;
 }
 
 export interface SongState {

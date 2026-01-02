@@ -27,6 +27,9 @@ interface ArrangementViewProps {
     playbackStep: number;
     isPerformanceMode: boolean;
     onSetPerformanceMode: (val: boolean) => void;
+    onOpenInstrument: (trackIdx: number) => void;
+    onSaveClick: () => void;
+    isLoggedIn: boolean;
 }
 
 export const ArrangementView: React.FC<ArrangementViewProps> = ({
@@ -53,12 +56,16 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
     playbackStep,
     isPerformanceMode,
     onSetPerformanceMode,
+    onOpenInstrument,
+    onSaveClick,
+    isLoggedIn
 }) => {
     const [dropPlaceholder, setDropPlaceholder] = React.useState<{ tIdx: number, pIdx: number } | null>(null);
     const [draggingItem, setDraggingItem] = React.useState<{ tIdx: number, pIdx: number } | null>(null);
     const [mousePos, setMousePos] = React.useState<{ x: number, y: number } | null>(null);
     const [dragVelocity, setDragVelocity] = React.useState(0);
     const lastMouseX = React.useRef(0);
+    const itemsRef = React.useRef<(HTMLDivElement | null)[]>([]);
 
     const formatTime = (seconds: number) => {
         const mins = Math.floor(seconds / 60);
@@ -138,6 +145,13 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                 </div>
 
                 <div className="flex items-center gap-6">
+                    <button
+                        onClick={onSaveClick}
+                        className="px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest bg-sky-500/10 text-sky-400 border border-sky-500/20 hover:bg-sky-500/20 transition-all flex items-center gap-2"
+                    >
+                        {isLoggedIn ? 'Save / Share' : 'Login to Save'}
+                    </button>
+
                     <label className="flex items-center gap-2 cursor-pointer group select-none">
                         <span className="text-[9px] font-bold uppercase text-slate-500 tracking-wider group-hover:text-slate-400 transition-colors">Follow</span>
                         <div className="relative">
@@ -162,7 +176,7 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                     <div key={track.id} className="flex items-center p-1 border-b border-white/5 last:border-0 min-w-max hover:bg-white/[0.02] transition-colors relative">
                         {/* Track Header */}
                         <div
-                            className={`w-20 shrink-0 flex flex-col justify-start p-1.5 border-r border-slate-800 mr-1 cursor-context-menu ${tIdx === editingTrackIndex ? 'opacity-100' : 'opacity-60 hover:opacity-100 transition-opacity'}`}
+                            className={`w-28 shrink-0 flex flex-col justify-start p-1.5 border-r border-slate-800 mr-1 cursor-context-menu ${tIdx === editingTrackIndex ? 'opacity-100' : 'opacity-60 hover:opacity-100 transition-opacity'}`}
                             onContextMenu={(e) => {
                                 e.preventDefault();
                                 onTrackLoopChange(tIdx, null);
@@ -170,7 +184,7 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                             title="Right-click to clear loop"
                         >
                             <div className="flex justify-between items-center mb-1">
-                                <span className={`text-[10px] font-black uppercase tracking-tighter ${tIdx === editingTrackIndex ? 'text-sky-400' : 'text-slate-500'}`}>
+                                <span className={`text-[10px] font-black uppercase tracking-tighter truncate max-w-[50px] ${tIdx === editingTrackIndex ? 'text-sky-400' : 'text-slate-500'}`} title={track.name}>
                                     {track.name}
                                 </span>
                                 <div className="flex gap-1">
@@ -183,8 +197,16 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                     <button
                                         onClick={() => onToggleSolo(tIdx)}
                                         className={`w-4 h-4 rounded text-[8px] font-bold flex items-center justify-center border transition-all ${track.soloed ? 'bg-amber-500 border-amber-400 text-white shadow-[0_0_10px_rgba(245,158,11,0.3)]' : 'bg-slate-800 border-slate-700 text-slate-500 hover:text-slate-300'}`}
+                                        title="Solo"
                                     >
                                         S
+                                    </button>
+                                    <button
+                                        onClick={() => onOpenInstrument(tIdx)}
+                                        className="w-4 h-4 rounded bg-slate-800 border border-slate-700 text-slate-500 hover:text-sky-400 flex items-center justify-center transition-all hover:bg-slate-700 hover:border-slate-600"
+                                        title="Instrument Settings"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M2 12h20M12 12a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" /></svg>
                                     </button>
                                 </div>
                             </div>
@@ -192,7 +214,35 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                         </div>
 
                         {/* Parts */}
-                        <div className="flex items-center relative">
+                        <div
+                            ref={el => { itemsRef.current[tIdx] = el; }}
+                            className="flex items-center relative h-full"
+                            onDragOver={(e) => {
+                                e.preventDefault();
+                                // Track-level drag over to handle end-of-list drops
+                                // If dragging over empty space at end
+                                if (itemsRef.current[tIdx]?.lastChild) {
+                                    const lastChild = itemsRef.current[tIdx].lastChild as HTMLElement;
+                                    const lastRect = lastChild.getBoundingClientRect();
+                                    if (e.clientX > lastRect.right) {
+                                        if (dropPlaceholder?.pIdx !== track.parts.length || dropPlaceholder?.tIdx !== tIdx) {
+                                            setDropPlaceholder({ tIdx, pIdx: track.parts.length });
+                                        }
+                                    }
+                                }
+                            }}
+                            onDrop={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                try {
+                                    const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+                                    if (data.tIdx === tIdx && dropPlaceholder) {
+                                        onMovePattern(tIdx, data.pIdx, dropPlaceholder.pIdx);
+                                    }
+                                } catch (err) { }
+                                setDropPlaceholder(null);
+                            }}
+                        >
                             {track.parts.map((part, pIdx) => {
                                 const isEditing = tIdx === editingTrackIndex && pIdx === editingPatternIndex;
                                 const myLoop = trackLoops[tIdx];

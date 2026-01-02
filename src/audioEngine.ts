@@ -80,25 +80,29 @@ export class AudioEngine {
         }
     }
 
-    createKick(time: number, rowGain = 0.8) {
+    createKick(time: number, rowGain = 0.8, config?: SoundConfig) {
         if (!this.ctx || !this.sequencerOutput) return;
+        const conf = config ? config.kick : this.soundConfig.kick;
+
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
         osc.connect(gain);
         gain.connect(this.sequencerOutput);
 
-        osc.frequency.setValueAtTime(this.soundConfig.kick.freq, time);
-        osc.frequency.exponentialRampToValueAtTime(0.01, time + this.soundConfig.kick.decay);
+        osc.frequency.setValueAtTime(conf.freq, time);
+        osc.frequency.exponentialRampToValueAtTime(0.01, time + conf.decay);
 
         gain.gain.setValueAtTime(rowGain, time);
-        gain.gain.exponentialRampToValueAtTime(0.01, time + this.soundConfig.kick.decay);
+        gain.gain.exponentialRampToValueAtTime(0.01, time + conf.decay);
 
         osc.start(time);
-        osc.stop(time + this.soundConfig.kick.decay);
+        osc.stop(time + conf.decay);
     }
 
-    createSnare(time: number, rowGain = 0.8) {
+    createSnare(time: number, rowGain = 0.8, config?: SoundConfig) {
         if (!this.ctx || !this.sequencerOutput) return;
+        const conf = config ? config.snare : this.soundConfig.snare;
+
         const noise = this.ctx.createBufferSource();
         const buffer = this.ctx.createBuffer(1, this.ctx.sampleRate * 0.1, this.ctx.sampleRate);
         const data = buffer.getChannelData(0);
@@ -107,11 +111,11 @@ export class AudioEngine {
 
         const filter = this.ctx.createBiquadFilter();
         filter.type = 'highpass';
-        filter.frequency.value = this.soundConfig.snare.freq;
+        filter.frequency.value = conf.freq;
 
         const gain = this.ctx.createGain();
-        gain.gain.setValueAtTime(this.soundConfig.snare.mix * rowGain, time);
-        gain.gain.exponentialRampToValueAtTime(0.01, time + this.soundConfig.snare.decay);
+        gain.gain.setValueAtTime(conf.mix * rowGain, time);
+        gain.gain.exponentialRampToValueAtTime(0.01, time + conf.decay);
 
         noise.connect(filter);
         filter.connect(gain);
@@ -122,7 +126,7 @@ export class AudioEngine {
         const oscGain = this.ctx.createGain();
         osc.type = 'triangle';
         osc.frequency.setValueAtTime(200, time);
-        oscGain.gain.setValueAtTime((1 - this.soundConfig.snare.mix) * rowGain, time);
+        oscGain.gain.setValueAtTime((1 - conf.mix) * rowGain, time);
         oscGain.gain.exponentialRampToValueAtTime(0.01, time + 0.1);
         osc.connect(oscGain);
         oscGain.connect(this.sequencerOutput);
@@ -130,8 +134,10 @@ export class AudioEngine {
         osc.stop(time + 0.15);
     }
 
-    createHiHat(time: number, rowGain = 0.8) {
+    createHiHat(time: number, rowGain = 0.8, config?: SoundConfig) {
         if (!this.ctx || !this.sequencerOutput) return;
+        const conf = config ? config.hat : this.soundConfig.hat;
+
         const bufferSize = this.ctx.sampleRate * 0.05;
         const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
         const data = buffer.getChannelData(0);
@@ -142,11 +148,11 @@ export class AudioEngine {
 
         const filter = this.ctx.createBiquadFilter();
         filter.type = 'bandpass';
-        filter.frequency.value = this.soundConfig.hat.freq;
+        filter.frequency.value = conf.freq;
 
         const gain = this.ctx.createGain();
         gain.gain.setValueAtTime(0.3 * rowGain, time);
-        gain.gain.exponentialRampToValueAtTime(0.01, time + this.soundConfig.hat.decay);
+        gain.gain.exponentialRampToValueAtTime(0.01, time + conf.decay);
 
         noise.connect(filter);
         filter.connect(gain);
@@ -154,46 +160,50 @@ export class AudioEngine {
         noise.start(time);
     }
 
-    createSynth(freq: number, time: number, durationSteps = 1, bpm: number, rowGain = 0.8) {
+    createSynth(freq: number, time: number, durationSteps = 1, bpm: number, rowGain = 0.8, config?: SoundConfig) {
         const secondsPerStep = 60.0 / bpm / 4;
         const durationSecs = durationSteps * secondsPerStep;
-        const voice = this.triggerSynth(freq, rowGain, time);
+        const voice = this.triggerSynth(freq, rowGain, time, config);
         if (!voice) return;
 
-        const release = Math.max(0.05, Math.min(durationSecs, this.soundConfig.synth.release));
+        const conf = config ? config.synth : this.soundConfig.synth;
+        const release = Math.max(0.05, Math.min(durationSecs, conf.release));
         voice.gain.gain.setValueAtTime(0.1 * rowGain, time + durationSecs - 0.01);
         voice.gain.gain.exponentialRampToValueAtTime(0.01, time + durationSecs + release);
         voice.osc.stop(time + durationSecs + release + 0.1);
     }
 
-    triggerSynth(freq: number, rowGain = 0.8, startTime?: number): any {
+    triggerSynth(freq: number, rowGain = 0.8, startTime?: number, config?: SoundConfig): any {
         if (!this.ctx || !this.sequencerOutput) return null;
+        const conf = config ? config.synth : this.soundConfig.synth;
+
         const time = startTime || this.ctx.currentTime;
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
         const filter = this.ctx.createBiquadFilter();
 
-        osc.type = this.soundConfig.synth.type;
+        osc.type = conf.type;
         osc.frequency.setValueAtTime(freq, time);
 
         filter.type = 'lowpass';
-        filter.frequency.setValueAtTime(this.soundConfig.synth.filter, time);
+        filter.frequency.setValueAtTime(conf.filter, time);
 
         osc.connect(filter);
         filter.connect(gain);
         gain.connect(this.sequencerOutput);
 
         gain.gain.setValueAtTime(0, time);
-        gain.gain.linearRampToValueAtTime(0.1 * rowGain, time + 0.01);
+        gain.gain.linearRampToValueAtTime(0.1 * rowGain, time + conf.attack);
 
         osc.start(time);
         return { osc, gain, filter };
     }
 
-    stopSynth(voice: any) {
+    stopSynth(voice: any, config?: SoundConfig) {
         if (!this.ctx || !voice) return;
+        const conf = config ? config.synth : this.soundConfig.synth;
         const time = this.ctx.currentTime;
-        const release = this.soundConfig.synth.release;
+        const release = conf.release;
         try {
             voice.gain.gain.cancelScheduledValues(time);
             voice.gain.gain.setValueAtTime(voice.gain.gain.value, time);
@@ -204,7 +214,7 @@ export class AudioEngine {
         }
     }
 
-    playStep(grid: Grid, stepIndex: number, time: number, configs: RowConfig[], bpm: number, trackGain: number = 1.0) {
+    playStep(grid: Grid, stepIndex: number, time: number, configs: RowConfig[], bpm: number, trackGain: number = 1.0, soundConfig?: SoundConfig) {
         if (!this.ctx) return;
 
         let totalR = 0, totalG = 0, totalB = 0, count = 0;
@@ -217,7 +227,7 @@ export class AudioEngine {
                 const freq = config.type === 'synth' ? config.freq * Math.pow(2, note.oct || 0) : config.freq;
 
                 if (config.type === 'synth') {
-                    this.createSynth(freq, time, note.d, bpm, finalGain);
+                    this.createSynth(freq, time, note.d, bpm, finalGain, soundConfig);
                 } else if (config.type === 'kick' || config.type === 'snare' || config.type === 'hat') {
                     if (note.d > 1) {
                         const totalHits = note.d * 2;
@@ -226,14 +236,14 @@ export class AudioEngine {
                             const hitTime = time + (i * subtickSecs);
                             const velocity = 0.7 + (i / (totalHits - 1)) * 0.3;
                             const hitGain = finalGain * velocity;
-                            if (config.type === 'kick') this.createKick(hitTime, hitGain);
-                            else if (config.type === 'snare') this.createSnare(hitTime, hitGain);
-                            else if (config.type === 'hat') this.createHiHat(hitTime, hitGain);
+                            if (config.type === 'kick') this.createKick(hitTime, hitGain, soundConfig);
+                            else if (config.type === 'snare') this.createSnare(hitTime, hitGain, soundConfig);
+                            else if (config.type === 'hat') this.createHiHat(hitTime, hitGain, soundConfig);
                         }
                     } else {
-                        if (config.type === 'kick') this.createKick(time, finalGain);
-                        else if (config.type === 'snare') this.createSnare(time, finalGain);
-                        else if (config.type === 'hat') this.createHiHat(time, finalGain);
+                        if (config.type === 'kick') this.createKick(time, finalGain, soundConfig);
+                        else if (config.type === 'snare') this.createSnare(time, finalGain, soundConfig);
+                        else if (config.type === 'hat') this.createHiHat(time, finalGain, soundConfig);
                     }
                 }
 

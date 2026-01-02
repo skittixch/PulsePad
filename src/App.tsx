@@ -5,8 +5,15 @@ import { SpreadsheetView } from './components/SpreadsheetView';
 import { NodalInterface } from './components/NodalInterface';
 import { ScalePieMenu } from './components/ScalePieMenu';
 import { VolumeMeter } from './components/VolumeMeter';
-import type { Note, RowConfig, Grid, FXGraph, Track, TrackPart } from './types';
-import { STEPS_PER_PATTERN, SCALES, DEFAULT_DRUM_ROWS, generateBlankGrid, getLabelSemitones, getRowConfigs, NOTE_TO_SEMI } from './constants';
+import { InstrumentDrawer } from './components/InstrumentDrawer';
+import { AuthModal } from './components/AuthModal';
+import { ShareModal } from './components/ShareModal';
+import { auth, db } from './firebase';
+import { onAuthStateChanged } from 'firebase/auth';
+import type { User } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
+import type { Note, RowConfig, Grid, FXGraph, Track, TrackPart, SoundConfig } from './types';
+import { STEPS_PER_PATTERN, SCALES, DEFAULT_DRUM_ROWS, generateBlankGrid, getLabelSemitones, getRowConfigs, NOTE_TO_SEMI, DEFAULT_SOUND_CONFIG } from './constants';
 import { DRUM_ARCHIVE } from './drumPatterns';
 import { audioEngine } from './audioEngine';
 
@@ -98,6 +105,15 @@ const App: React.FC = () => {
   const [selectedNotes, setSelectedNotes] = useState<{ r: number, c: number }[]>([]);
   const [clipboard, setClipboard] = useState<{ r: number, c: number, note: Note }[] | null>(null);
 
+  const [openDrawerTrackIndex, setOpenDrawerTrackIndex] = useState<number | null>(null);
+
+  // Auth & Sharing State
+  const [user, setUser] = useState<User | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [currentSongId, setCurrentSongId] = useState<string | null>(null);
+  const [isLoadingSong, setIsLoadingSong] = useState(false);
+
   const [fxGraph, setFxGraph] = useState<FXGraph>(() => {
     const saved = localStorage.getItem('pulse_fx_graph');
     return saved ? JSON.parse(saved) : initialFXGraph;
@@ -120,14 +136,15 @@ const App: React.FC = () => {
         return parsedSong.map((gridArray: Grid[], tIdx: number) => ({
           id: `track-${tIdx}-${Math.random().toString(36).substr(2, 9)}`,
           name: `Track ${tIdx + 1}`,
-          parts: gridArray.map((grid, pIdx) => ({
+          parts: Array.isArray(gridArray) ? gridArray.map((grid, pIdx) => ({
             grid,
             scale: (parsedScales[tIdx]?.[pIdx]) || 'C Maj Pent'
-          })),
+          })) : [{ grid: generateBlankGrid(getRowConfigs('C Maj Pent', isUnrolled).length), scale: 'C Maj Pent' }],
           isLooping: true,
           volume: 1.0,
           muted: false,
-          soloed: false
+          soloed: false,
+          instrument: DEFAULT_SOUND_CONFIG
         }));
       } catch (e) {
         console.warn("Migration Failed, resetting:", e);
@@ -141,9 +158,71 @@ const App: React.FC = () => {
       isLooping: true,
       volume: 1.0,
       muted: false,
-      soloed: false
+      soloed: false,
+      instrument: DEFAULT_SOUND_CONFIG
     }];
   });
+
+  const showToast = useCallback((msg: string) => {
+    setToast({ visible: true, message: msg });
+    setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 2000);
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      if (currentUser) {
+        setIsAuthModalOpen(false);
+      }
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    const songId = params.get('song');
+    if (songId) {
+      setIsLoadingSong(true);
+      const loadSong = async () => {
+        try {
+          const docRef = doc(db, 'songs', songId);
+          const docSnap = await getDoc(docRef);
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            const parsedData = JSON.parse(data.data);
+            if (parsedData.tracks && parsedData.bpm) {
+              setTracks(parsedData.tracks);
+              setBpm(parsedData.bpm);
+              setCurrentSongId(songId);
+              showToast(`Loaded "${data.name}"`);
+            }
+          } else {
+            showToast("Song not found.");
+          }
+        } catch (e) {
+          console.error("Error loading song:", e);
+          showToast("Failed to load song.");
+        } finally {
+          setIsLoadingSong(false);
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+      };
+      loadSong();
+    }
+    return () => unsubscribe();
+  }, [showToast]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        if (user) {
+          setIsShareModalOpen(true);
+        } else {
+          setIsAuthModalOpen(true);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [user]);
 
   const currentTrack = tracks[editingTrackIndex] || tracks[0];
   const currentPart = currentTrack.parts[editingPatternIndex] || currentTrack.parts[0];
@@ -274,13 +353,14 @@ const App: React.FC = () => {
 
     const time = audioEngine.ctx!.currentTime;
     const freq = config.type === 'synth' ? config.freq * Math.pow(2, note?.oct || 0) : config.freq;
+    const soundConfig = currentTrack.instrument;
 
     if (config.type === 'synth') {
-      activePreviewVoiceRef.current = audioEngine.triggerSynth(freq, config.gain);
-    } else if (config.type === 'kick') audioEngine.createKick(time, config.gain);
-    else if (config.type === 'snare') audioEngine.createSnare(time, config.gain);
-    else if (config.type === 'hat') audioEngine.createHiHat(time, config.gain);
-  }, [rowConfigs, currentPart.scale, stopPreview]);
+      activePreviewVoiceRef.current = audioEngine.triggerSynth(freq, config.gain, undefined, soundConfig);
+    } else if (config.type === 'kick') audioEngine.createKick(time, config.gain, soundConfig);
+    else if (config.type === 'snare') audioEngine.createSnare(time, config.gain, soundConfig);
+    else if (config.type === 'hat') audioEngine.createHiHat(time, config.gain, soundConfig);
+  }, [rowConfigs, currentPart.scale, stopPreview, currentTrack.instrument]);
 
   const addNote = (r: number, c: number, d: number = 1, data?: Partial<Note>) => {
     const newTracks = [...tracks];
@@ -354,13 +434,23 @@ const App: React.FC = () => {
     const newTracks = [...tracks];
     const track = { ...newTracks[trackIdx] };
     const nextParts = [...track.parts];
+
+    // Adjust target index because removal shifts subsequent elements
+    let targetIndex = toIndex;
+    if (targetIndex > fromIndex) {
+      targetIndex -= 1;
+    }
+
+    // Safety check
+    if (targetIndex === fromIndex) return;
+
     const [movedPart] = nextParts.splice(fromIndex, 1);
-    nextParts.splice(toIndex, 0, movedPart);
+    nextParts.splice(targetIndex, 0, movedPart);
     track.parts = nextParts;
     newTracks[trackIdx] = track;
     commitToHistory(newTracks);
     setEditingTrackIndex(trackIdx);
-    setEditingPatternIndex(toIndex);
+    setEditingPatternIndex(targetIndex);
   };
 
   const duplicatePattern = (trackIdx: number, patIndex: number) => {
@@ -394,7 +484,8 @@ const App: React.FC = () => {
       isLooping: true,
       volume: 1.0,
       muted: false,
-      soloed: false
+      soloed: false,
+      instrument: DEFAULT_SOUND_CONFIG
     };
     const nextTracks = [...tracks, newTrack];
     commitToHistory(nextTracks);
@@ -411,6 +502,14 @@ const App: React.FC = () => {
   const toggleSolo = (trackIdx: number) => {
     const next = [...tracks];
     next[trackIdx] = { ...next[trackIdx], soloed: !next[trackIdx].soloed };
+    commitToHistory(next);
+  };
+
+  const handleUpdateTrackInstrument = (trackIdx: number, config: SoundConfig) => {
+    const next = [...tracks];
+    next[trackIdx] = { ...next[trackIdx], instrument: config };
+    // We don't necessarily need to commit checking changes to history immediately, 
+    // but for undo/redo consistency it's good.
     commitToHistory(next);
   };
 
@@ -682,7 +781,8 @@ const App: React.FC = () => {
       isLooping: true,
       volume: 1.0,
       muted: false,
-      soloed: false
+      soloed: false,
+      instrument: DEFAULT_SOUND_CONFIG
     }];
 
     setEditingTrackIndex(0);
@@ -724,9 +824,9 @@ const App: React.FC = () => {
     notes.forEach((offset, i) => {
       const time = audioEngine.ctx!.currentTime + (i * 0.005);
       const freq = 440 * Math.pow(2, ((rootSemi + offset + 12) - 57) / 12);
-      audioEngine.createSynth(freq, time, 0.4, bpm, 0.4);
+      audioEngine.createSynth(freq, time, 0.4, bpm, 0.4, currentTrack.instrument);
     });
-  }, [bpm]);
+  }, [bpm, currentTrack.instrument]);
 
   useEffect(() => {
     if (toast.visible) {
@@ -779,7 +879,7 @@ const App: React.FC = () => {
           const part = track.parts[partIdx];
           if (part && part.grid) {
             const patternRowConfigs = getRowConfigs(part.scale, isUnrolledRef.current);
-            audioEngine.playStep(part.grid, currentStep, nextNoteTimeRef.current, patternRowConfigs, currentBpm, track.volume);
+            audioEngine.playStep(part.grid, currentStep, nextNoteTimeRef.current, patternRowConfigs, currentBpm, track.volume, track.instrument);
           }
         });
 
@@ -938,6 +1038,15 @@ const App: React.FC = () => {
       if (e.code === 'Space' && (e.target as HTMLElement).tagName !== 'INPUT' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
         e.preventDefault();
         togglePlayback();
+      }
+
+      if (e.key === 'Home' && (e.target as HTMLElement).tagName !== 'INPUT' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        playbackStepRef.current = 0;
+        setPlaybackStep(0);
+        playbackPatternRef.current = 0;
+        setPlaybackPatternIndex(0);
+        setToast({ message: "Reset to start", visible: true });
       }
 
       // Z Key for Radial Menu (Hold)
@@ -1232,6 +1341,9 @@ const App: React.FC = () => {
                   playbackStep={playbackStep}
                   isPerformanceMode={isPerformanceMode}
                   onSetPerformanceMode={setIsPerformanceMode}
+                  onOpenInstrument={setOpenDrawerTrackIndex}
+                  onSaveClick={() => user ? setIsShareModalOpen(true) : setIsAuthModalOpen(true)}
+                  isLoggedIn={!!user}
                 />
               </div>
               <VolumeMeter />
@@ -1257,6 +1369,35 @@ const App: React.FC = () => {
         }}
         onPreviewChord={handlePreviewChord}
         onClose={() => setIsPieMenuOpen(false)}
+      />
+      <InstrumentDrawer
+        isOpen={openDrawerTrackIndex !== null}
+        track={openDrawerTrackIndex !== null ? tracks[openDrawerTrackIndex] : null}
+        onClose={() => setOpenDrawerTrackIndex(null)}
+        onUpdateInstrument={(config) => {
+          if (openDrawerTrackIndex !== null) {
+            handleUpdateTrackInstrument(openDrawerTrackIndex, config);
+          }
+        }}
+      />
+
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        user={user}
+      />
+
+      <ShareModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        user={user}
+        songData={{ tracks, bpm }}
+        currentSongId={currentSongId}
+        onSaveComplete={(id) => {
+          setCurrentSongId(id);
+          setIsShareModalOpen(false);
+          showToast("Song Saved!");
+        }}
       />
     </div>
   );
