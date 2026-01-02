@@ -1,78 +1,97 @@
 # Pulsepad User Manual
 
-Welcome to the official Pulsepad documentation. Pulsepad is a pattern-based music production environment built for high-speed melodic and rhythmic sequencing.
+Welcome to the official Pulsepad documentation. Pulsepad is a pattern-based music production environment designed for high-speed rhythmic and melodic sequencing.
 
 ## Introduction
 
-Pulsepad combines a traditional 16-step grid sequencer with a modular FX routing system and a dynamic arrangement view. It is designed for both studio composition and live performance, with a heavy emphasis on real-time audio feedback and contextual scale awareness.
+Pulsepad combines a 16-step grid sequencer with a modular FX routing system and a multitrack arrangement view. It prioritizes real-time tactile feedback, modular routing, and contextual awareness to streamline the creative workflow.
 
-## Interface Overview
+## Workspace Overview
 
-### The Sequencer Grid
-The primary workspace for note entry. It consists of melodic synth rows (mapped to the active scale) and fixed drum rows (Kick, Snare, Hi-Hat).
+### 1. Sequencer Grid
+The Grid is the primary workspace for note entry. It is divided into two sections:
+- **Melodic Rows**: Tunned to the active scale. Note labels update dynamically based on the part's scale.
+- **Percussion Rows**: Fixed-pitch triggers for Kick, Snare, and Hi-Hat.
 
-- **Note Entry**: Click any empty cell to place a note.
-- **Sustained Previews**: Click and hold a note to hear its current pitch and timbre.
-- **Multi-Note Editing**: When multiple notes are selected, resizing or octave-shifting moves the entire group.
+**Interaction:**
+- **Add Note**: Left-click an empty cell.
+- **Sustained Preview**: Click and hold any note to hear its pitch and duration.
+- **Octave Shift**: Scroll the mouse wheel while dragging or resizing a note to shift its octave.
+- **Multi-Note Edit**: Drag a marquee to select multiple notes. Resizing or shifting any selected note applies the change to the entire group.
 
-### Arrangement View
-Located at the top of the interface, this view manages the horizontal progression of the song across multiple tracks.
+### 2. Arrangement View
+The Arrangement View (top) manages the timeline and track structure.
 
-- **Parts**: Modular blocks of 16 steps.
-- **Independent Looping**: Each part can be toggled to loop independently, enabling poly-metric rhythms and varying track lengths.
-- **Scale Inheritance**: New parts automatically inherit the scale from the preceding part.
+- **Tracks**: Parallel lanes of audio playback.
+- **Parts**: Modular 16-step patterns.
+- **Looping**: Right-click a part to toggle its looping state. Independent looping allows for complex poly-rhythms.
+- **Management**: Middle-click to delete parts; `Ctrl + C / V` to copy and paste.
 
-### Modular FX Graph
-A visual environment for routing audio through a chain of effects.
+### 3. Nodal Interface (FX Graph)
+The Nodal Interface allows you to route audio from the Sequencer through various effects and modulation sources.
 
-- **Nodes**: Effect processors (Filter, Delay, Reverb, etc.) and sources/outputs.
-- **Modulation**: Parameters can be modulated by LFOs or driven by real-time audio analysis (e.g., color-driven automation).
+**Navigation:**
+- **Pan**: Left-click and drag on the background workspace.
+- **Minimap**: Use the minimap (top-right) for rapid navigation across large graphs.
+- **Frame View**: Press `F` to center and frame all existing nodes.
+- **Linear Layout**: Press `L` to automatically arrange nodes in a signal chain.
+
+**Ports and Cables:**
+- **Audio Ports**: Indicated by indigo circles. These carry high-bandwidth audio signals.
+- **Scalar/Int Ports**: Carriers for modulation and control data (Sky/Emerald).
+- **Wiring**: Drag from an output port to an input port to create a connection.
+- **Re-wiring**: Drag from an existing input connection to "pull" the cable and move it to a different port.
+
+**Advanced Nodal Operations:**
+- **Cutter**: Hold `Ctrl + Right-Click` and drag across cables to slice them.
+- **Bridging (Injection)**: Hold `Shift` while dragging a node over an active audio cable to "inject" the node into that signal path.
+- **Extraction**: Hold `Shift` while dragging a node out of its current audio connections to remove it and automatically bridge the source/destination.
+- **Duplicate**: Press `Ctrl + D` to duplicate the current selection of nodes.
+
+---
 
 ## Key Concepts
 
-### Dynamic Scales
-Pulsepad utilizes a pattern-specific scale system. Each 16-step part can have its own root note and scale type.
-- **Inheritance**: Creating a new part or track propagates the active scale to maintain tonal consistency.
-- **Global Awareness**: The sequencer grid automatically re-labels its rows based on the scale of the active part.
+### Dynamic Scale Inheritance
+Pulsepad uses a per-pattern scale system. Each part can have a unique root and type (e.g., C Major, G# Minor).
+- **Propagation**: Creating a new part or track automatically inherits the scale of the preceding part, ensuring tonal continuity by default.
+- **Global Awareness**: The grid and nodal parameters (like filter frequency) can be set to respond to the scale and analysis of the active audio.
 
-### Drum Retriggering (Rolls)
-Any drum note with a duration greater than 1 step triggers the **Retrigger Engine**.
-- **Roll Speed**: 32ndnd note (2x grid speed).
-- **Velocity Mapping**: A linear volume ramp is applied across the duration for increased realism.
+### Drum Retrigger Engine
+Drum notes with a duration (`d`) greater than 1 step trigger the Retrigger Engine.
+- **Sub-Division**: Long notes are automatically split into 32ndnd-note pulses (twice grid speed).
+- **Velocity Dynamics**: A volume ramp is applied across the duration of the roll, starting at 70% and reaching 100% gain at the end of the note.
 
-## Input Reference
+---
 
-### General Controls
+## Technical Reference
+
+### General Hotkeys
 | Action | Input |
 | :--- | :--- |
-| Play / Stop | `Space` |
-| Undo | `Ctrl + Z` |
-| Redo | `Ctrl + Y` |
-| Copy Pattern | `Ctrl + C` |
-| Paste Pattern | `Ctrl + V` |
+| **Play / Stop** | `Space` (Restarts from Step 1) |
+| **Undo / Redo** | `Ctrl + Z` / `Ctrl + Y` |
+| **Copy / Paste (Part)** | `Ctrl + C` / `Ctrl + V` |
 
-### Tool Set
-| Tool | Key | Description |
+### Interaction Table
+| Workspace | Input | Result |
 | :--- | :--- | :--- |
-| **Pointer** | `V` | Default selection, movement, and resizing. |
-| **Razor** | `C` | Splits notes at the nearest quantized step. |
-
-### Interaction Shortcuts
-| Action | Input |
-| :--- | :--- |
-| **Radial Menu** | `Z` (Hold) | Open Scale selection at mouse position. |
-| **Octave Shift** | `Mouse Wheel` | Increment/Decrement pitch during note interaction. |
-| **Delete Note** | `Del` / `Backspace` | Removes selected notes. |
-| **Delete Part** | `Middle-Click` | Removes the part from the arrangement. |
-| **Toggle Loop** | `Right-Click` | Switches the part's looping state. |
+| **Grid** | `V` | Pointer Tool (Select/Move/Resize) |
+| **Grid** | `C` | Razor Tool (Split Notes) |
+| **Grid** | `Z` (Hold) | Scale Radial Menu |
+| **Grid** | `Mouse Wheel` | Octave Shift (while interacting) |
+| **Graph** | `Ctrl + Right-Click` | Cutter (Slice cables) |
+| **Graph** | `Shift + Drag` | Bridge / Extract Node |
+| **Graph** | `F` | Focus / Frame all nodes |
+| **Graph** | `L` | Auto-layout linear chain |
+| **Arrangement** | `Right-Click` | Toggle Loop State |
+| **Arrangement** | `Middle-Click` | Delete Part |
 
 ## Design Philosophy
 
-Pulsepad's development is guided by three core principles:
-
-1. **Audio First**: Every interaction that modifies the musical state must provide immediate, high-quality audio feedback.
-2. **Context Over Defaults**: The system should intelligently guess the user's intent based on their active workspace (e.g., scale inheritance and auto-focus).
-3. **Frictionless Navigation**: Minimize state-switching. Tools like the Razor and Scale Pie Menu are accessible via persistent hotkeys to prevent workflow interruption.
+1. **Low Latency Input**: All UI interactions provide immediate audio results (sustained previews).
+2. **Contextual Scaling**: Tone and structure are inherited horizontally to maintain musical flow.
+3. **Tactile Routing**: signal paths are treated as physical objects that can be cut, bridged, or re-routed with minimal menu diving.
 
 ---
-*For more information, visit the live application at [pulsepad.web.app](https://pulsepad.web.app).*
+*For the latest updates, visit [pulsepad.web.app](https://pulsepad.web.app).*
