@@ -112,7 +112,6 @@ const App: React.FC = () => {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [currentSongId, setCurrentSongId] = useState<string | null>(null);
-  const [isLoadingSong, setIsLoadingSong] = useState(false);
 
   const [fxGraph, setFxGraph] = useState<FXGraph>(() => {
     const saved = localStorage.getItem('pulse_fx_graph');
@@ -169,7 +168,7 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser: User | null) => {
       setUser(currentUser);
       if (currentUser) {
         setIsAuthModalOpen(false);
@@ -179,7 +178,6 @@ const App: React.FC = () => {
     const params = new URLSearchParams(window.location.search);
     const songId = params.get('song');
     if (songId) {
-      setIsLoadingSong(true);
       const loadSong = async () => {
         try {
           const docRef = doc(db, 'songs', songId);
@@ -200,7 +198,6 @@ const App: React.FC = () => {
           console.error("Error loading song:", e);
           showToast("Failed to load song.");
         } finally {
-          setIsLoadingSong(false);
           window.history.replaceState({}, document.title, window.location.pathname);
         }
       };
