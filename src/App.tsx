@@ -349,6 +349,20 @@ const App: React.FC = () => {
     commitToHistory(newTracks);
   };
 
+  const movePattern = (trackIdx: number, fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex) return;
+    const newTracks = [...tracks];
+    const track = { ...newTracks[trackIdx] };
+    const nextParts = [...track.parts];
+    const [movedPart] = nextParts.splice(fromIndex, 1);
+    nextParts.splice(toIndex, 0, movedPart);
+    track.parts = nextParts;
+    newTracks[trackIdx] = track;
+    commitToHistory(newTracks);
+    setEditingTrackIndex(trackIdx);
+    setEditingPatternIndex(toIndex);
+  };
+
   const duplicatePattern = (trackIdx: number, patIndex: number) => {
     const newTracks = [...tracks];
     const track = { ...newTracks[trackIdx] };
@@ -1129,6 +1143,18 @@ const App: React.FC = () => {
                 onSelectNotes={setSelectedNotes}
                 selectedNotes={selectedNotes}
                 playbackStep={(playbackPatternIndex % currentTrack.parts.length) === editingPatternIndex ? playbackStep : -1}
+                playheadDistance={(() => {
+                  const loop = trackLoops[editingTrackIndex];
+                  let effectiveIndex = playbackPatternIndex;
+                  if (loop) {
+                    const [start, end] = loop;
+                    const len = end - start + 1;
+                    effectiveIndex = start + (playbackPatternIndex % len);
+                  } else {
+                    effectiveIndex = playbackPatternIndex % currentTrack.parts.length;
+                  }
+                  return effectiveIndex - editingPatternIndex;
+                })()}
                 isPlaying={isPlaying}
                 snap={snap}
                 isUnrolled={isUnrolled}
@@ -1189,6 +1215,7 @@ const App: React.FC = () => {
                   onAddTrack={addTrack}
                   onDuplicatePattern={duplicatePattern}
                   onQueuePattern={setQueuedPatternIndex}
+                  onMovePattern={movePattern}
                   onToggleMute={toggleMute}
                   onToggleSolo={toggleSolo}
                   onTrackLoopChange={(trackIdx, range) => {

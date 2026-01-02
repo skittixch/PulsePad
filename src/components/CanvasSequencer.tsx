@@ -46,6 +46,7 @@ interface CanvasSequencerProps {
     isUnrolled: boolean;
     scrollTop: number;
     onSetScrollTop: (val: number | ((prev: number) => number)) => void;
+    playheadDistance?: number;
 }
 
 const LABEL_WIDTH = 80;
@@ -63,6 +64,7 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
     onSelectNotes,
     selectedNotes,
     playbackStep,
+    playheadDistance = 0,
     isPlaying,
     snap,
     isUnrolled,
@@ -80,6 +82,7 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
     const gridRef = useRef(grid);
     const interactionRef = useRef(interaction);
     const playbackStepRef = useRef(playbackStep);
+    const playheadDistanceRef = useRef(playheadDistance);
     const isPlayingRef = useRef(isPlaying);
     const dimensionsRef = useRef(dimensions);
     const snapRef = useRef(snap);
@@ -92,6 +95,7 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
     useEffect(() => { gridRef.current = grid; }, [grid]);
     useEffect(() => { interactionRef.current = interaction; }, [interaction]);
     useEffect(() => { playbackStepRef.current = playbackStep; }, [playbackStep]);
+    useEffect(() => { playheadDistanceRef.current = playheadDistance; }, [playheadDistance]);
     useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
     useEffect(() => {
         dimensionsRef.current = dimensions;
@@ -196,6 +200,7 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
         const currentGrid = gridRef.current;
         const currentInteraction = interactionRef.current;
         const currentStep = playbackStepRef.current;
+        const currentDistance = playheadDistanceRef.current; // Get current distance
         const currentIsPlaying = isPlayingRef.current;
         const { rowHeight: rH, stepWidth: sW } = dimensionsRef.current;
         const currentSnap = snapRef.current;
@@ -401,6 +406,33 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
             ctx.stroke();
             ctx.shadowBlur = 0;
         }
+
+        // 5. Draw Off-Screen Pulse Indicator
+        if (currentIsPlaying && currentDistance !== 0) {
+            const isLeft = currentDistance < 0;
+            // Abs distance determines "closeness". Closer = Faster Pulse.
+            // 1 pattern away = fast. 4 patterns away = slow.
+            const absDist = Math.abs(currentDistance);
+            const speed = Math.max(2, 20 / Math.max(1, absDist)); // 20 speed for close, 2 for far
+            const pulse = (Math.sin(Date.now() / 100 * (speed / 10)) + 1) / 2; // 0 to 1
+
+            const indX = isLeft ? LABEL_WIDTH : cssWidth - 4;
+
+            ctx.fillStyle = `rgba(255, 255, 255, ${0.2 + pulse * 0.6})`;
+            ctx.shadowBlur = 10 + pulse * 10;
+            ctx.shadowColor = '#fff';
+            ctx.fillRect(indX, 0, 4, cssHeight);
+
+            // Subtle gradient to bleed into the view
+            const grad = ctx.createLinearGradient(isLeft ? indX : indX - 100, 0, isLeft ? indX + 100 : indX + 4, 0);
+            grad.addColorStop(isLeft ? 0 : 1, `rgba(14, 165, 233, ${pulse * 0.3})`);
+            grad.addColorStop(isLeft ? 1 : 0, 'rgba(14, 165, 233, 0)');
+            ctx.fillStyle = grad;
+            ctx.fillRect(isLeft ? indX : indX - 100, 0, 100, cssHeight);
+
+            ctx.shadowBlur = 0;
+        }
+
     }, [getColorHex, getBorderColorHex, adjustColor]);
 
     useEffect(() => {

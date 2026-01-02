@@ -1,6 +1,7 @@
 import React from 'react';
 import type { Track } from '../types';
-import { STEPS_PER_PATTERN, getRowConfigs } from '../constants';
+import { STEPS_PER_PATTERN } from '../constants';
+import { PartCard } from './PartCard';
 
 interface ArrangementViewProps {
     tracks: Track[];
@@ -15,6 +16,7 @@ interface ArrangementViewProps {
     onDuplicatePattern: (trackIndex: number, index: number) => void;
     onQueuePattern: (index: number) => void;
     onTrackLoopChange: (trackIndex: number, range: number[] | null) => void;
+    onMovePattern: (trackIndex: number, fromIndex: number, toIndex: number) => void;
     onAddTrack: () => void;
     isPlaying: boolean;
     isFollowMode: boolean;
@@ -40,6 +42,7 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
     onDuplicatePattern,
     onQueuePattern,
     onTrackLoopChange,
+    onMovePattern,
     onAddTrack,
     isPlaying,
     isFollowMode,
@@ -51,6 +54,12 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
     isPerformanceMode,
     onSetPerformanceMode,
 }) => {
+    const [dropPlaceholder, setDropPlaceholder] = React.useState<{ tIdx: number, pIdx: number } | null>(null);
+    const [draggingItem, setDraggingItem] = React.useState<{ tIdx: number, pIdx: number } | null>(null);
+    const [mousePos, setMousePos] = React.useState<{ x: number, y: number } | null>(null);
+    const [dragVelocity, setDragVelocity] = React.useState(0);
+    const lastMouseX = React.useRef(0);
+
     const formatTime = (seconds: number) => {
         const mins = Math.floor(seconds / 60);
         const secs = Math.floor(seconds % 60);
@@ -62,7 +71,50 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
     const currentSeconds = (playbackPatternIndex * STEPS_PER_PATTERN + playbackStep) * (60.0 / bpm / 4);
 
     return (
-        <div className="w-full h-full bg-slate-900/40 rounded-xl border border-slate-800/60 p-0 flex flex-col backdrop-blur-xl shrink-0 overflow-hidden">
+        <div
+            className="w-full h-full bg-slate-900/40 rounded-xl border border-slate-800/60 p-0 flex flex-col backdrop-blur-xl shrink-0 overflow-hidden relative"
+            onDragOver={(e) => {
+                e.preventDefault();
+                // Update mouse pos and velocity for custom cursor
+                const delta = e.clientX - lastMouseX.current;
+                // Simple exponential decay or clamping for rotation tilt
+                setDragVelocity(prev => (prev * 0.8) + (delta * 0.5));
+                lastMouseX.current = e.clientX;
+                setMousePos({ x: e.clientX, y: e.clientY });
+            }}
+        >
+            {/* Custom Drag Overlay */}
+            {draggingItem && mousePos && (
+                <div
+                    className="fixed pointer-events-none z-[100]"
+                    style={{
+                        left: mousePos.x,
+                        top: mousePos.y,
+                        transform: `translate(-50%, -50%) rotate(${Math.max(-15, Math.min(15, dragVelocity))}deg)`,
+                        transition: 'transform 0.1s cubic-bezier(0.2, 0, 0.2, 1)'
+                    }}
+                >
+                    <PartCard
+                        part={tracks[draggingItem.tIdx].parts[draggingItem.pIdx]}
+                        trackIndex={draggingItem.tIdx}
+                        partIndex={draggingItem.pIdx}
+                        isEditing={true} // Force highlight style
+                        isInLoop={false}
+                        isLoopStart={false}
+                        isLoopEnd={false}
+                        isQueued={false}
+                        isPlayingPattern={false}
+                        playbackStep={-1}
+                        onClick={() => { }}
+                        onMouseDown={() => { }}
+                        onDoubleClick={() => { }}
+                        onContextMenu={() => { }}
+                        onDelete={() => { }}
+                        isOverlay={true}
+                    />
+                </div>
+            )}
+
             <div className="p-1 px-3 border-b border-slate-800/60 flex justify-between items-center shrink-0">
                 <div className="flex items-center gap-4">
                     <h3 className="text-slate-400 uppercase tracking-[0.2em] text-[10px] font-black flex items-center gap-2">
@@ -140,7 +192,7 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                         </div>
 
                         {/* Parts */}
-                        <div className="flex items-center">
+                        <div className="flex items-center relative">
                             {track.parts.map((part, pIdx) => {
                                 const isEditing = tIdx === editingTrackIndex && pIdx === editingPatternIndex;
                                 const myLoop = trackLoops[tIdx];
@@ -159,19 +211,29 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                 const isPlayingPattern = isPlaying && pIdx === activePartIdx;
                                 const isQueued = pIdx === queuedPatternIndex;
 
-                                const configs = getRowConfigs(part.scale, false);
+                                const showPlaceholderBefore = dropPlaceholder?.tIdx === tIdx && dropPlaceholder?.pIdx === pIdx;
+                                const isBeingDragged = draggingItem?.tIdx === tIdx && draggingItem?.pIdx === pIdx;
 
                                 return (
                                     <React.Fragment key={pIdx}>
+                                        {/* Drop Placeholder */}
                                         <div
-                                            className={`relative flex flex-col justify-between p-1 border transition-all cursor-pointer w-32 h-12 shrink-0 group overflow-hidden mr-1 mt-1 mb-1
-                                                ${isEditing ? 'border-sky-500 bg-sky-500/10 shadow-[0_0_15px_rgba(14,165,233,0.1)] z-10' : 'border-white/10 bg-slate-950/40 hover:border-white/20'}
-                                                ${isInLoop ? 'border-amber-500/50 bg-amber-500/5 z-10' : ''}
-                                                ${isLoopStart ? 'border-l-amber-500' : ''}
-                                                ${isLoopEnd ? 'border-r-amber-500' : ''}
-                                                ${isQueued ? 'border-violet-500/50 shadow-[0_0_10px_rgba(167,139,250,0.1)] z-10' : ''}
-                                                rounded-lg
+                                            className={`transition-all duration-200 ease-out bg-transparent flex items-center justify-center
+                                                ${showPlaceholderBefore ? 'w-32 mr-1 opacity-100' : 'w-0 opacity-0 overflow-hidden'}
                                             `}
+                                        >
+                                            {showPlaceholderBefore && (
+                                                <div className="w-full h-12 rounded-lg border-2 border-dashed border-sky-500/50 bg-sky-500/10 backdrop-blur-sm animate-pulse flex items-center justify-center">
+                                                    <div className="w-6 h-6 rounded-full bg-sky-500/20 flex items-center justify-center">
+                                                        <span className="text-sky-400 font-bold">+</span>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div
+                                            draggable
+                                            className={`transition-all duration-300 ${isBeingDragged ? 'w-0 opacity-0 m-0 overflow-hidden' : 'w-auto opacity-100 mr-1 mt-1 mb-1'}`}
                                             onClick={(e) => {
                                                 onToggleFollow(false);
                                                 if (e.shiftKey) {
@@ -188,73 +250,94 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                                     onDeletePattern(tIdx, pIdx);
                                                 }
                                             }}
-                                            onDoubleClick={() => onQueuePattern(pIdx)}
+                                            onDragStart={(e) => {
+                                                // Native Drag Setup
+                                                e.dataTransfer.setData('text/plain', JSON.stringify({ tIdx, pIdx }));
+                                                e.dataTransfer.effectAllowed = 'move';
+
+                                                // Create a transparent drag image to hide native ghost
+                                                const img = new Image();
+                                                img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'; // 1x1 transparent
+                                                e.dataTransfer.setDragImage(img, 0, 0);
+
+                                                // Delay state update to allow drag to initialize properly before DOM shifts
+                                                requestAnimationFrame(() => {
+                                                    setDraggingItem({ tIdx, pIdx });
+                                                    setMousePos({ x: e.clientX, y: e.clientY });
+                                                    lastMouseX.current = e.clientX;
+                                                });
+                                            }}
+                                            onDragEnd={() => {
+                                                setDraggingItem(null);
+                                                setDropPlaceholder(null);
+                                                setMousePos(null);
+                                                setDragVelocity(0);
+                                            }}
+                                            onDragOver={(e) => {
+                                                e.preventDefault();
+                                                // Allow bubbling so container can track mousePos
+
+                                                const rect = e.currentTarget.getBoundingClientRect();
+                                                const mid = rect.left + rect.width / 2;
+                                                const insertIdx = e.clientX > mid ? pIdx + 1 : pIdx;
+                                                if (!isBeingDragged && (dropPlaceholder?.pIdx !== insertIdx || dropPlaceholder?.tIdx !== tIdx)) {
+                                                    setDropPlaceholder({ tIdx, pIdx: insertIdx });
+                                                }
+                                            }}
+                                            onDrop={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                try {
+                                                    const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+                                                    if (data.tIdx === tIdx && dropPlaceholder) {
+                                                        onMovePattern(tIdx, data.pIdx, dropPlaceholder.pIdx);
+                                                    }
+                                                } catch (err) { }
+                                                setDropPlaceholder(null);
+                                            }}
                                             onContextMenu={(e) => {
                                                 e.preventDefault();
-                                                // If already in loop, clear it. Otherwise, set it.
                                                 onTrackLoopChange(tIdx, isInLoop ? null : [pIdx, pIdx]);
                                             }}
                                         >
-                                            <div className="flex justify-between items-start leading-none mb-1">
-                                                <div className="flex flex-col">
-                                                    <span className={`text-[8px] font-black uppercase tracking-tighter ${isEditing ? 'text-sky-400' : 'text-slate-500'}`}>
-                                                        Part {pIdx + 1}
-                                                    </span>
-                                                    <span className="text-[6px] text-slate-600 font-bold uppercase">{part.scale}</span>
-                                                </div>
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        onDeletePattern(tIdx, pIdx);
-                                                    }}
-                                                    className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-slate-800 rounded text-slate-500 hover:text-rose-500 transition-all font-bold text-[10px]"
-                                                >
-                                                    ×
-                                                </button>
-                                            </div>
+                                            <PartCard
+                                                part={part}
+                                                trackIndex={tIdx}
+                                                partIndex={pIdx}
+                                                isEditing={isEditing}
+                                                isInLoop={!!isInLoop}
+                                                isLoopStart={!!isLoopStart}
+                                                isLoopEnd={!!isLoopEnd}
+                                                isQueued={isQueued}
+                                                isPlayingPattern={isPlayingPattern}
+                                                playbackStep={playbackStep}
+                                                onClick={() => { }}
+                                                onMouseDown={() => { }}
+                                                onDoubleClick={() => onQueuePattern(pIdx)}
+                                                onContextMenu={() => { }}
+                                                onDelete={(e) => {
+                                                    e.stopPropagation();
+                                                    onDeletePattern(tIdx, pIdx);
+                                                }}
+                                            />
+                                        </div>
 
-                                            <div className="relative h-5 w-full bg-black/40 rounded-md overflow-hidden border border-white/5 pointer-events-none">
-                                                {part.grid.map((row, r) =>
-                                                    row.map((note, c) => {
-                                                        if (!note) return null;
-                                                        const rowHeight = 100 / configs.length;
-                                                        const stepWidth = 100 / STEPS_PER_PATTERN;
-
-                                                        const getColor = (colorClass: string) => {
-                                                            if (colorClass.includes('rose-500')) return '#f43f5e';
-                                                            if (colorClass.includes('orange-500')) return '#f97316';
-                                                            if (colorClass.includes('amber-500')) return '#f59e0b';
-                                                            if (colorClass.includes('sky-500')) return '#0ea5e9';
-                                                            return '#64748b';
-                                                        };
-
-                                                        const baseColor = (note.rgb || (configs[r] ? getColor(configs[r].activeColor) : '#64748b'));
-
-                                                        return (
-                                                            <div
-                                                                key={`${r}-${c}`}
-                                                                className="absolute rounded-[1px]"
-                                                                style={{
-                                                                    top: `${r * rowHeight}%`,
-                                                                    left: `${c * stepWidth}%`,
-                                                                    width: `${note.d * stepWidth}%`,
-                                                                    height: `${rowHeight}%`,
-                                                                    backgroundColor: baseColor,
-                                                                    opacity: 0.8
-                                                                }}
-                                                            />
-                                                        );
-                                                    })
+                                        {/* End of list placeholder */}
+                                        {pIdx === track.parts.length - 1 && (
+                                            <div
+                                                className={`transition-all duration-200 ease-out bg-transparent flex items-center justify-center
+                                                    ${dropPlaceholder?.tIdx === tIdx && dropPlaceholder?.pIdx === track.parts.length ? 'w-32 ml-1 opacity-100' : 'w-0 opacity-0 overflow-hidden'}
+                                                `}
+                                            >
+                                                {dropPlaceholder?.tIdx === tIdx && dropPlaceholder?.pIdx === track.parts.length && (
+                                                    <div className="w-full h-12 rounded-lg border-2 border-dashed border-sky-500/50 bg-sky-500/10 backdrop-blur-sm animate-pulse flex items-center justify-center">
+                                                        <div className="w-6 h-6 rounded-full bg-sky-500/20 flex items-center justify-center">
+                                                            <span className="text-sky-400 font-bold">+</span>
+                                                        </div>
+                                                    </div>
                                                 )}
                                             </div>
-
-                                            {isPlayingPattern && (
-                                                <div
-                                                    className="absolute bottom-0 left-0 h-[3px] bg-sky-500 transition-all shadow-[0_0_10px_#0ea5e9]"
-                                                    style={{ width: `${(playbackStep + 1) / STEPS_PER_PATTERN * 100}%` }}
-                                                />
-                                            )}
-                                        </div>
+                                        )}
                                     </React.Fragment>
                                 );
                             })}
@@ -291,6 +374,6 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                     <div className="absolute inset-x-0 top-0 h-px bg-transparent group-hover/add-track:bg-sky-500/20 transition-colors" />
                 </div>
             </div>
-        </div>
+        </div >
     );
 };
