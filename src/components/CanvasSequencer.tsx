@@ -411,24 +411,31 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
         if (currentIsPlaying && currentDistance !== 0) {
             const isLeft = currentDistance < 0;
             // Abs distance determines "closeness". Closer = Faster Pulse.
-            // 1 pattern away = fast. 4 patterns away = slow.
+            // Exponential frequency: 
+            // base speed when far = 0.5Hz
+            // speed when close (dist=1) = very fast
             const absDist = Math.abs(currentDistance);
-            const speed = Math.max(2, 20 / Math.max(1, absDist)); // 20 speed for close, 2 for far
-            const pulse = (Math.sin(Date.now() / 100 * (speed / 10)) + 1) / 2; // 0 to 1
+
+            // Formula: Base + (Scaling / (dist ^ power))
+            // When dist is 1, speed is high. When dist is 10, speed is low.
+            const speed = 2 + (50 / Math.pow(absDist, 1.5));
+
+            const pulse = (Math.sin(Date.now() / 1000 * speed) + 1) / 2; // 0 to 1
 
             const indX = isLeft ? LABEL_WIDTH : cssWidth - 4;
 
-            ctx.fillStyle = `rgba(255, 255, 255, ${0.2 + pulse * 0.6})`;
-            ctx.shadowBlur = 10 + pulse * 10;
+            // "Way less glow" - reduced opacity and blur
+            ctx.fillStyle = `rgba(255, 255, 255, ${0.1 + pulse * 0.3})`; // Max 0.4 opacity
+            ctx.shadowBlur = 2 + pulse * 5; // Max 7px blur
             ctx.shadowColor = '#fff';
             ctx.fillRect(indX, 0, 4, cssHeight);
 
-            // Subtle gradient to bleed into the view
-            const grad = ctx.createLinearGradient(isLeft ? indX : indX - 100, 0, isLeft ? indX + 100 : indX + 4, 0);
-            grad.addColorStop(isLeft ? 0 : 1, `rgba(14, 165, 233, ${pulse * 0.3})`);
+            // Subtle gradient to bleed into the view - heavily reduced
+            const grad = ctx.createLinearGradient(isLeft ? indX : indX - 40, 0, isLeft ? indX + 40 : indX + 4, 0);
+            grad.addColorStop(isLeft ? 0 : 1, `rgba(14, 165, 233, ${pulse * 0.1})`); // Max 0.1 opacity
             grad.addColorStop(isLeft ? 1 : 0, 'rgba(14, 165, 233, 0)');
             ctx.fillStyle = grad;
-            ctx.fillRect(isLeft ? indX : indX - 100, 0, 100, cssHeight);
+            ctx.fillRect(isLeft ? indX : indX - 40, 0, 40, cssHeight);
 
             ctx.shadowBlur = 0;
         }
