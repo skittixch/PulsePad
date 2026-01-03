@@ -76,7 +76,7 @@ const initialFXGraph: FXGraph = {
     { id: 'out', type: 'output', x: 800, y: 300, params: {} }
   ],
   connections: [
-    { source: 'src', target: 'out' }
+    { source: 'src', target: 'out', sourcePort: 'main' }
   ],
   nextId: 1
 };
@@ -112,6 +112,10 @@ const App: React.FC = () => {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [currentSongId, setCurrentSongId] = useState<string | null>(null);
+  const [isPianoMode, setIsPianoMode] = useState(false);
+  const [globalOctaveShift, setGlobalOctaveShift] = useState(0);
+  const [activeRowsByKeyboard, setActiveRowsByKeyboard] = useState<Record<number, boolean>>({});
+  const keyboardVoicesRef = useRef<Map<string, any>>(new Map());
 
   const [fxGraph, setFxGraph] = useState<FXGraph>(() => {
     const saved = localStorage.getItem('pulse_fx_graph');
@@ -206,8 +210,37 @@ const App: React.FC = () => {
     return () => unsubscribe();
   }, [showToast]);
 
+  const currentTrack = tracks[editingTrackIndex] || tracks[0];
+  const currentPart = currentTrack.parts[editingPatternIndex] || currentTrack.parts[0];
+
   useEffect(() => {
+    const PIANO_KEYS = ['KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyG', 'KeyH', 'KeyJ', 'KeyK', 'KeyL', 'Semicolon', 'Quote'];
+
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Toggle Piano Mode based on CapsLock
+      const capsOn = e.getModifierState('CapsLock');
+      setIsPianoMode(capsOn);
+
+      // Global Octave Control
+      if (e.code === 'NumpadAdd' || (e.code === 'Equal' && e.shiftKey)) {
+        e.preventDefault();
+        setGlobalOctaveShift(prev => {
+          const next = prev + 1;
+          showToast(`Global Octave: ${next > 0 ? '+' : ''}${next}`);
+          return next;
+        });
+        return;
+      }
+      if (e.code === 'NumpadSubtract' || e.code === 'Minus') {
+        e.preventDefault();
+        setGlobalOctaveShift(prev => {
+          const next = prev - 1;
+          showToast(`Global Octave: ${next > 0 ? '+' : ''}${next}`);
+          return next;
+        });
+        return;
+      }
+
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
         if (user) {
@@ -215,14 +248,102 @@ const App: React.FC = () => {
         } else {
           setIsAuthModalOpen(true);
         }
+        return;
+      }
+
+      // Home key reset
+      if (e.key === 'Home') {
+        e.preventDefault();
+        playbackStepRef.current = 0;
+        playbackPatternRef.current = 0;
+        setPlaybackStep(0);
+        setPlaybackPatternIndex(0);
+        showToast("Reset to start");
+        return;
+      }
+
+      if (capsOn) {
+        setIsPianoMode(true);
+        const keyIndex = PIANO_KEYS.indexOf(e.code);
+        if (keyIndex !== -1) {
+          e.preventDefault();
+          if (keyboardVoicesRef.current.has(e.code)) return; // No repeat
+
+          const configs = getRowConfigs(currentPart.scale, isUnrolled);
+          const drumCount = 3; // hat, snare, kick
+          const synthRowCount = configs.length - drumCount;
+          let targetRow = -1;
+
+          if (keyIndex === 0) targetRow = synthRowCount + 2; // A -> Kick
+          else if (keyIndex === 1) targetRow = synthRowCount + 1; // S -> Snare
+          else if (keyIndex === 2) targetRow = synthRowCount + 0; // D -> Hat
+          else {
+            const synthIndex = keyIndex - 3;
+            targetRow = (synthRowCount - 1) - synthIndex;
+          }
+
+          if (configs[targetRow]) {
+            setActiveRowsByKeyboard(prev => ({ ...prev, [targetRow]: true }));
+            const config = configs[targetRow];
+            const soundConfig = currentTrack.instrument;
+            const freq = config.type === 'synth' ? config.freq * Math.pow(2, globalOctaveShift) : config.freq;
+
+            audioEngine.init();
+            audioEngine.resume();
+
+            if (config.type === 'synth') {
+              const voice = audioEngine.triggerSynth(freq, config.gain, undefined, soundConfig);
+              keyboardVoicesRef.current.set(e.code, voice);
+            } else if (config.type === 'kick') audioEngine.createKick(audioEngine.ctx!.currentTime, config.gain, soundConfig);
+            else if (config.type === 'snare') audioEngine.createSnare(audioEngine.ctx!.currentTime, config.gain, soundConfig);
+            else if (config.type === 'hat') audioEngine.createHiHat(audioEngine.ctx!.currentTime, config.gain, soundConfig);
+          }
+        }
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [user]);
 
-  const currentTrack = tracks[editingTrackIndex] || tracks[0];
-  const currentPart = currentTrack.parts[editingPatternIndex] || currentTrack.parts[0];
+    const handleKeyUp = (e: KeyboardEvent) => {
+      const capsOn = e.getModifierState('CapsLock');
+      setIsPianoMode(capsOn);
+
+      const keyIndex = PIANO_KEYS.indexOf(e.code);
+      if (keyIndex !== -1) {
+        const configs = getRowConfigs(currentPart.scale, isUnrolled);
+        const drumCount = 3;
+        const synthRowCount = configs.length - drumCount;
+        let targetRow = -1;
+
+        if (keyIndex === 0) targetRow = synthRowCount + 2;
+        else if (keyIndex === 1) targetRow = synthRowCount + 1;
+        else if (keyIndex === 2) targetRow = synthRowCount + 0;
+        else {
+          const synthIndex = keyIndex - 3;
+          targetRow = (synthRowCount - 1) - synthIndex;
+        }
+
+        if (targetRow !== -1) {
+          setActiveRowsByKeyboard(prev => {
+            const next = { ...prev };
+            delete next[targetRow];
+            return next;
+          });
+        }
+      }
+
+      if (keyboardVoicesRef.current.has(e.code)) {
+        const voice = keyboardVoicesRef.current.get(e.code);
+        audioEngine.stopSynth(voice, currentTrack.instrument);
+        keyboardVoicesRef.current.delete(e.code);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [user, currentPart.scale, isUnrolled, currentTrack.instrument, showToast]);
 
 
   const [history, setHistory] = useState<{ tracks: Track[], fxGraph: FXGraph }[]>([]);
@@ -366,7 +487,7 @@ const App: React.FC = () => {
     const part = { ...parts[editingPatternIndex] };
     const grid = [...part.grid];
     const row = [...grid[r]];
-    const note = { d: Math.max(1, Math.round(d)), o: 0, ...data };
+    const note = { d: Math.max(1, Math.round(d)), o: 0, oct: globalOctaveShift, ...data };
     row[c] = note;
     grid[r] = row;
     part.grid = grid;
@@ -387,7 +508,7 @@ const App: React.FC = () => {
       row[c] = null;
       setSelectedNotes(prev => prev.filter(sn => !(sn.r === r && sn.c === c)));
     } else {
-      const note = { d: 1, o: 0 };
+      const note = { d: 1, o: 0, oct: globalOctaveShift };
       row[c] = note;
     }
     grid[r] = row;
@@ -876,7 +997,7 @@ const App: React.FC = () => {
           const part = track.parts[partIdx];
           if (part && part.grid) {
             const patternRowConfigs = getRowConfigs(part.scale, isUnrolledRef.current);
-            audioEngine.playStep(part.grid, currentStep, nextNoteTimeRef.current, patternRowConfigs, currentBpm, track.volume, track.instrument);
+            audioEngine.playStep(part.grid, currentStep, nextNoteTimeRef.current, patternRowConfigs, currentBpm, track.volume, track.instrument, trackIdx);
           }
         });
 
@@ -1209,145 +1330,160 @@ const App: React.FC = () => {
           </div>
         </div>
       </header>
+      <div className="flex-1 flex flex-row overflow-hidden min-h-0 relative">
+        <InstrumentDrawer
+          isOpen={openDrawerTrackIndex !== null}
+          track={openDrawerTrackIndex !== null ? tracks[openDrawerTrackIndex] : null}
+          onClose={() => setOpenDrawerTrackIndex(null)}
+          onUpdateInstrument={(config) => {
+            if (openDrawerTrackIndex !== null) {
+              handleUpdateTrackInstrument(openDrawerTrackIndex, config);
+            }
+          }}
+        />
 
-      <main className="flex-1 w-full flex flex-col gap-2 overflow-hidden pb-2">
-        <section className="flex-1 bg-slate-900/40 rounded-xl border border-white/5 backdrop-blur-3xl shadow-2xl relative overflow-hidden flex flex-col min-h-0">
-          <div className="p-1 px-3 border-b border-slate-800/60 flex justify-between items-center shrink-0">
-            <h3 className="text-slate-400 uppercase tracking-[0.2em] text-[10px] font-black flex items-center gap-2">
+        <main className="flex-1 min-w-0 flex flex-col gap-2 overflow-hidden pb-2 px-2">
+          <section className="flex-1 bg-slate-900/40 rounded-xl border border-white/5 backdrop-blur-3xl shadow-2xl relative overflow-hidden flex flex-col min-h-0">
+            <div className="p-1 px-3 border-b border-slate-800/60 flex justify-between items-center shrink-0">
+              <h3 className="text-slate-400 uppercase tracking-[0.2em] text-[10px] font-black flex items-center gap-2">
+                {viewMode === 'sequencer' && (
+                  <>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20v-6M6 20V10M18 20V4" /></svg>
+                    Composition
+                  </>
+                )}
+                {viewMode === 'node' && (
+                  <>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
+                    FX Chain
+                  </>
+                )}
+                {viewMode === 'spreadsheet' && (
+                  <>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="3" y1="9" x2="21" y2="9" /><line x1="3" y1="15" x2="21" y2="15" /><line x1="9" y1="3" x2="9" y2="21" /><line x1="15" y1="3" x2="15" y2="21" /></svg>
+                    Logic Data
+                  </>
+                )}
+              </h3>
+            </div>
+            <div className="flex-1 min-h-0 bg-slate-900 overflow-hidden relative">
               {viewMode === 'sequencer' && (
-                <>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20v-6M6 20V10M18 20V4" /></svg>
-                  Composition
-                </>
-              )}
-              {viewMode === 'node' && (
-                <>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
-                  FX Chain
-                </>
+                <CanvasSequencer
+                  grid={currentPart.grid}
+                  rowConfigs={getRowConfigs(currentPart.scale, isUnrolled)}
+                  onToggleNote={toggleNote}
+                  onAddNote={addNote}
+                  onCommitNote={handleCommitNote}
+                  onCommitMultiNote={handleCommitMultiNote}
+                  onCopyMultiNote={handleCopyMultiNote}
+                  onPreviewNote={(r, note) => startPreview(r, note, currentPart.scale)}
+                  onStopPreviewNote={stopPreview}
+                  activeRowsByKeyboard={activeRowsByKeyboard}
+                  onSelectNotes={setSelectedNotes}
+                  selectedNotes={selectedNotes}
+                  playbackStep={(playbackPatternIndex % currentTrack.parts.length) === editingPatternIndex ? playbackStep : -1}
+                  playheadDistance={(() => {
+                    const loop = trackLoops[editingTrackIndex];
+                    let effectiveIndex = playbackPatternIndex;
+                    if (loop) {
+                      const [start, end] = loop;
+                      const len = end - start + 1;
+                      effectiveIndex = start + (playbackPatternIndex % len);
+                    } else {
+                      effectiveIndex = playbackPatternIndex % currentTrack.parts.length;
+                    }
+                    return effectiveIndex - editingPatternIndex;
+                  })()}
+                  isPlaying={isPlaying}
+                  snap={snap}
+                  isUnrolled={isUnrolled}
+                  scrollTop={sequencerScrollTop}
+                  onSetScrollTop={setSequencerScrollTop}
+                />
               )}
               {viewMode === 'spreadsheet' && (
-                <>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="3" y1="9" x2="21" y2="9" /><line x1="3" y1="15" x2="21" y2="15" /><line x1="9" y1="3" x2="9" y2="21" /><line x1="15" y1="3" x2="15" y2="21" /></svg>
-                  Logic Data
-                </>
-              )}
-            </h3>
-          </div>
-          <div className="flex-1 min-h-0 bg-slate-900 overflow-hidden relative">
-            {viewMode === 'sequencer' && (
-              <CanvasSequencer
-                grid={currentPart.grid}
-                rowConfigs={getRowConfigs(currentPart.scale, isUnrolled)}
-                onToggleNote={toggleNote}
-                onAddNote={addNote}
-                onCommitNote={handleCommitNote}
-                onCommitMultiNote={handleCommitMultiNote}
-                onCopyMultiNote={handleCopyMultiNote}
-                onPreviewNote={(r, note) => startPreview(r, note, currentPart.scale)}
-                onStopPreviewNote={stopPreview}
-                onSelectNotes={setSelectedNotes}
-                selectedNotes={selectedNotes}
-                playbackStep={(playbackPatternIndex % currentTrack.parts.length) === editingPatternIndex ? playbackStep : -1}
-                playheadDistance={(() => {
-                  const loop = trackLoops[editingTrackIndex];
-                  let effectiveIndex = playbackPatternIndex;
-                  if (loop) {
-                    const [start, end] = loop;
-                    const len = end - start + 1;
-                    effectiveIndex = start + (playbackPatternIndex % len);
-                  } else {
-                    effectiveIndex = playbackPatternIndex % currentTrack.parts.length;
-                  }
-                  return effectiveIndex - editingPatternIndex;
-                })()}
-                isPlaying={isPlaying}
-                snap={snap}
-                isUnrolled={isUnrolled}
-                scrollTop={sequencerScrollTop}
-                onSetScrollTop={setSequencerScrollTop}
-              />
-            )}
-            {viewMode === 'spreadsheet' && (
-              <SpreadsheetView
-                grid={currentPart.grid}
-                rowConfigs={getRowConfigs(currentPart.scale, isUnrolled)}
-                onUpdateNote={handleUpdateNote}
-              />
-            )}
-            {viewMode === 'node' && (
-              <NodalInterface
-                graph={fxGraph}
-                onUpdateGraph={setFxGraph}
-                onCommitGraph={(newGraph) => commitToHistory(tracks, newGraph)}
-              />
-            )}
-          </div>
-        </section>
-
-        {isArrOpen && (
-          <>
-            <div
-              className={`h-4 w-full cursor-ns-resize flex items-center justify-center group -mb-2 mt-1 z-10`}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                setIsResizingArr(true);
-                dragStartYRef.current = e.clientY;
-                dragStartHeightRef.current = arrHeight;
-              }}
-            >
-              <div className={`w-full h-[1px] transition-colors ${isResizingArr ? 'bg-sky-500' : 'bg-slate-800 group-hover:bg-sky-500/50'}`} />
-              <div className={`absolute px-4 py-0.5 bg-slate-900 border border-slate-800 rounded-full flex gap-1 transition-all ${isResizingArr ? 'border-sky-500 shadow-[0_0_15px_rgba(14,165,233,0.3)] scale-110 opacity-100' : 'opacity-40 group-hover:opacity-100 group-hover:border-slate-600'}`}>
-                <div className="w-1 h-1 bg-slate-600 rounded-full" />
-                <div className="w-1 h-1 bg-slate-600 rounded-full" />
-                <div className="w-1 h-1 bg-slate-600 rounded-full" />
-              </div>
-            </div>
-            <div className="flex flex-row overflow-hidden bg-slate-900 shadow-2xl border-t border-slate-800" style={{ height: `${arrHeight}px` }}>
-              <div className="flex-grow min-w-0 transition-shadow duration-300">
-                <ArrangementView
-                  tracks={tracks}
-                  editingTrackIndex={editingTrackIndex}
-                  editingPatternIndex={editingPatternIndex}
-                  playbackPatternIndex={playbackPatternIndex}
-                  queuedPatternIndex={queuedPatternIndex}
-                  trackLoops={trackLoops}
-                  onSelectPattern={(trackIdx, patIdx) => {
-                    setEditingTrackIndex(trackIdx);
-                    setEditingPatternIndex(patIdx);
-                  }}
-                  onInsertPattern={insertPattern}
-                  onDeletePattern={deletePattern}
-                  onAddTrack={addTrack}
-                  onDuplicatePattern={duplicatePattern}
-                  onQueuePattern={setQueuedPatternIndex}
-                  onMovePattern={movePattern}
-                  onToggleMute={toggleMute}
-                  onToggleSolo={toggleSolo}
-                  onTrackLoopChange={(trackIdx, range) => {
-                    setTrackLoops((prev: (number[] | null)[]) => {
-                      const next = [...prev];
-                      next[trackIdx] = range;
-                      return next;
-                    });
-                  }}
-                  isPlaying={isPlaying}
-                  isFollowMode={isFollowMode}
-                  onToggleFollow={setIsFollowMode}
-                  bpm={bpm}
-                  playbackStep={playbackStep}
-                  isPerformanceMode={isPerformanceMode}
-                  onSetPerformanceMode={setIsPerformanceMode}
-                  onOpenInstrument={setOpenDrawerTrackIndex}
-                  onSaveClick={() => user ? setIsShareModalOpen(true) : setIsAuthModalOpen(true)}
-                  isLoggedIn={!!user}
+                <SpreadsheetView
+                  grid={currentPart.grid}
+                  rowConfigs={getRowConfigs(currentPart.scale, isUnrolled)}
+                  onUpdateNote={handleUpdateNote}
                 />
-              </div>
-              <VolumeMeter />
+              )}
+              {viewMode === 'node' && (
+                <NodalInterface
+                  graph={fxGraph}
+                  onUpdateGraph={setFxGraph}
+                  onCommitGraph={(newGraph) => commitToHistory(tracks, newGraph)}
+                  trackCount={tracks.length}
+                  trackNames={tracks.map(t => t.name)}
+                />
+              )}
             </div>
-          </>
-        )}
-      </main>
+          </section>
+
+          {isArrOpen && (
+            <>
+              <div
+                className={`h-4 w-full cursor-ns-resize flex items-center justify-center group -mb-2 mt-1 z-10`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setIsResizingArr(true);
+                  dragStartYRef.current = e.clientY;
+                  dragStartHeightRef.current = arrHeight;
+                }}
+              >
+                <div className={`w-full h-[1px] transition-colors ${isResizingArr ? 'bg-sky-500' : 'bg-slate-800 group-hover:bg-sky-500/50'}`} />
+                <div className={`absolute px-4 py-0.5 bg-slate-900 border border-slate-800 rounded-full flex gap-1 transition-all ${isResizingArr ? 'border-sky-500 shadow-[0_0_15px_rgba(14,165,233,0.3)] scale-110 opacity-100' : 'opacity-40 group-hover:opacity-100 group-hover:border-slate-600'}`}>
+                  <div className="w-1 h-1 bg-slate-600 rounded-full" />
+                  <div className="w-1 h-1 bg-slate-600 rounded-full" />
+                  <div className="w-1 h-1 bg-slate-600 rounded-full" />
+                </div>
+              </div>
+              <div className="flex flex-row overflow-hidden bg-slate-900 shadow-2xl border-t border-slate-800" style={{ height: `${arrHeight}px` }}>
+                <div className="flex-grow min-w-0 transition-shadow duration-300">
+                  <ArrangementView
+                    tracks={tracks}
+                    editingTrackIndex={editingTrackIndex}
+                    editingPatternIndex={editingPatternIndex}
+                    playbackPatternIndex={playbackPatternIndex}
+                    queuedPatternIndex={queuedPatternIndex}
+                    trackLoops={trackLoops}
+                    onSelectPattern={(trackIdx, patIdx) => {
+                      setEditingTrackIndex(trackIdx);
+                      setEditingPatternIndex(patIdx);
+                    }}
+                    onInsertPattern={insertPattern}
+                    onDeletePattern={deletePattern}
+                    onAddTrack={addTrack}
+                    onDuplicatePattern={duplicatePattern}
+                    onQueuePattern={setQueuedPatternIndex}
+                    onMovePattern={movePattern}
+                    onToggleMute={toggleMute}
+                    onToggleSolo={toggleSolo}
+                    onTrackLoopChange={(trackIdx, range) => {
+                      setTrackLoops((prev: (number[] | null)[]) => {
+                        const next = [...prev];
+                        next[trackIdx] = range;
+                        return next;
+                      });
+                    }}
+                    isPlaying={isPlaying}
+                    isFollowMode={isFollowMode}
+                    onToggleFollow={setIsFollowMode}
+                    bpm={bpm}
+                    playbackStep={playbackStep}
+                    isPerformanceMode={isPerformanceMode}
+                    onSetPerformanceMode={setIsPerformanceMode}
+                    onOpenInstrument={setOpenDrawerTrackIndex}
+                    onSaveClick={() => user ? setIsShareModalOpen(true) : setIsAuthModalOpen(true)}
+                    isLoggedIn={!!user}
+                  />
+                </div>
+                <VolumeMeter />
+              </div>
+            </>
+          )}
+        </main>
+      </div>
 
       {
         toast.visible && (
@@ -1366,16 +1502,6 @@ const App: React.FC = () => {
         }}
         onPreviewChord={handlePreviewChord}
         onClose={() => setIsPieMenuOpen(false)}
-      />
-      <InstrumentDrawer
-        isOpen={openDrawerTrackIndex !== null}
-        track={openDrawerTrackIndex !== null ? tracks[openDrawerTrackIndex] : null}
-        onClose={() => setOpenDrawerTrackIndex(null)}
-        onUpdateInstrument={(config) => {
-          if (openDrawerTrackIndex !== null) {
-            handleUpdateTrackInstrument(openDrawerTrackIndex, config);
-          }
-        }}
       />
 
       <AuthModal
@@ -1396,6 +1522,12 @@ const App: React.FC = () => {
           showToast("Song Saved!");
         }}
       />
+
+      {isPianoMode && (
+        <div className="fixed bottom-12 left-1/2 -translate-x-1/2 bg-sky-500/20 border border-sky-400/30 text-sky-400 text-[10px] font-bold px-3 py-1 rounded-full animate-pulse z-[200]">
+          PIANO MODE ON
+        </div>
+      )}
     </div>
   );
 };

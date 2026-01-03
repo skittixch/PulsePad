@@ -46,6 +46,7 @@ interface CanvasSequencerProps {
     isUnrolled: boolean;
     scrollTop: number;
     onSetScrollTop: (val: number | ((prev: number) => number)) => void;
+    activeRowsByKeyboard?: Record<number, boolean>;
     playheadDistance?: number;
 }
 
@@ -69,7 +70,8 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
     snap,
     isUnrolled,
     scrollTop,
-    onSetScrollTop
+    onSetScrollTop,
+    activeRowsByKeyboard = {}
 }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -806,7 +808,7 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
         <div ref={containerRef} className="w-full h-full relative cursor-crosshair overflow-hidden touch-none" onWheel={handleWheel}>
             <div className="absolute left-0 top-0 bottom-0 w-[80px] bg-slate-900/90 z-10 border-r border-white/5 pointer-events-none" style={{ transform: `translateY(-${scrollTop}px)` }}>
                 {rowConfigs.map((config, i) => (
-                    <div key={i} style={{ height: `${rowHeight}px` }} className={`flex items-center justify-end pr-3 text-[10px] font-bold uppercase transition-all duration-75 ${interaction.type === 'strumming' && interaction.lastStrummedR === i ? 'bg-sky-500 text-white scale-110 shadow-[0_0_15px_#0ea5e9] z-20' : interaction.hoveredRow === i ? 'bg-slate-800 text-slate-200' : 'text-slate-500'}`}>
+                    <div key={i} style={{ height: `${rowHeight}px` }} className={`flex items-center justify-end pr-3 text-[10px] font-bold uppercase transition-all duration-75 ${activeRowsByKeyboard[i] ? 'bg-white text-slate-900 scale-110 shadow-[0_0_20px_white] z-30' : interaction.type === 'strumming' && interaction.lastStrummedR === i ? 'bg-sky-500 text-white scale-110 shadow-[0_0_15px_#0ea5e9] z-20' : interaction.hoveredRow === i ? 'bg-slate-800 text-slate-200' : 'text-slate-500'}`}>
                         {config.label}
                     </div>
                 ))}

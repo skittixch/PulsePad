@@ -20,7 +20,7 @@ export interface RowConfig {
 
 export interface FXNode {
     id: string;
-    type: 'delay' | 'filter' | 'distortion' | 'reverb' | 'compressor' | 'source' | 'output' | 'float' | 'int' | 'lfo' | 'setRange';
+    type: 'delay' | 'filter' | 'distortion' | 'reverb' | 'compressor' | 'source' | 'output' | 'float' | 'int' | 'lfo' | 'setRange' | 'mixer' | 'parametricEQ';
     x: number;
     y: number;
     params: Record<string, number>;
@@ -30,6 +30,7 @@ export interface FXNode {
 export interface FXConnection {
     source: string;
     target: string;
+    sourcePort?: string;
     targetPort?: string;
 }
 

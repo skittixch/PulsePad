@@ -1,11 +1,13 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import type { FXGraph, FXNode } from '../types';
+import type { FXGraph, FXNode, FXConnection } from '../types';
 import { audioEngine } from '../audioEngine';
 
 interface NodalInterfaceProps {
     graph: FXGraph;
     onUpdateGraph: (graph: FXGraph) => void;
     onCommitGraph: (graph: FXGraph) => void;
+    trackCount?: number;
+    trackNames?: string[];
 }
 
 const LFOVisualizer: React.FC<{ rate: number, amp: number, type: number, phase: number, normalize: boolean }> = ({ rate, amp, type, phase, normalize }) => {
@@ -83,81 +85,179 @@ const LFOVisualizer: React.FC<{ rate: number, amp: number, type: number, phase: 
     return <canvas ref={canvasRef} width={200} height={64} className="w-full h-full" />;
 };
 
-const NODE_DEFS = {
-    source: { name: "Sequencer", color: "border-emerald-500", outType: "audio", params: [] },
-    output: { name: "Speakers", color: "border-sky-500", inType: "audio", params: [] },
-    delay: {
-        name: "Delay", color: "border-violet-500", inType: "audio", outType: "audio",
-        params: [
-            { id: "time", label: "Time", min: 0, max: 1, step: 0.01, default: 0.25, type: "scalar" },
-            { id: "feedback", label: "Feedback", min: 0, max: 0.9, step: 0.01, default: 0.4, type: "scalar" },
-            { id: "mix", label: "Mix", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" }
-        ]
-    },
-    filter: {
-        name: "Filter", color: "border-yellow-500", inType: "audio", outType: "audio",
-        params: [
-            { id: "freq", label: "Freq", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" },
-            { id: "q", label: "Q", min: 0, max: 1, step: 0.01, default: 0.1, type: "scalar" }
-        ]
-    },
-    distortion: {
-        name: "Distortion", color: "border-orange-500", inType: "audio", outType: "audio",
-        params: [
-            { id: "drive", label: "Drive", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" }
-        ]
-    },
-    reverb: {
-        name: "Reverb", color: "border-pink-500", inType: "audio", outType: "audio",
-        params: [
-            { id: "time", label: "Time", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" },
-            { id: "decay", label: "Decay", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" },
-            { id: "mix", label: "Mix", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" }
-        ]
-    },
-    compressor: {
-        name: "Compressor", color: "border-cyan-500", inType: "audio", outType: "audio",
-        params: [
-            { id: "threshold", label: "Thresh", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" },
-            { id: "ratio", label: "Ratio", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" },
-            { id: "attack", label: "Atk", min: 0, max: 1, step: 0.01, default: 0.1, type: "scalar" },
-            { id: "release", label: "Rel", min: 0, max: 1, step: 0.01, default: 0.2, type: "scalar" }
-        ]
-    },
-    float: {
-        name: "Float", color: "border-sky-500", outType: "scalar",
-        params: [
-            { id: "val", label: "Value", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" }
-        ]
-    },
-    int: {
-        name: "Integer", color: "border-emerald-500", outType: "int",
-        params: [
-            { id: "val", label: "Value", min: 0, max: 100, step: 1, default: 50, type: "int" }
-        ]
-    },
-    lfo: {
-        name: "LFO", color: "border-indigo-400", outType: "scalar",
-        params: [
-            { id: "rate", label: "Rate", min: 0.1, max: 5, step: 0.001, default: 1.0, type: "scalar" },
-            { id: "amp", label: "Amp", min: 0, max: 1, step: 0.01, default: 1.0, type: "scalar" },
-            { id: "phase", label: "Phase", min: 0, max: 1, step: 0.01, default: 0, type: "scalar" },
-            { id: "normalize", label: "Norm", default: 0, type: "bool" },
-            { id: "type", label: "Wave", min: 0, max: 3, step: 1, default: 0, type: "int" } // 0: Sin, 1: Tri, 2: Saw, 3: Sqr
-        ]
-    },
-    setRange: {
-        name: "Set Range", color: "border-rose-400", inType: "scalar", outType: "scalar",
-        params: [
-            { id: "oldMin", label: "In Min", min: -10, max: 10, step: 0.1, default: -1, type: "scalar" },
-            { id: "oldMax", label: "In Max", min: -10, max: 10, step: 0.1, default: 1, type: "scalar" },
-            { id: "newMin", label: "Out Min", min: -10, max: 10, step: 0.1, default: 0, type: "scalar" },
-            { id: "newMax", label: "Out Max", min: -10, max: 10, step: 0.1, default: 1, type: "scalar" }
-        ]
-    }
-};
+const EQVisualizer: React.FC<{ params: any }> = ({ params }) => {
+    const canvasRef = useRef<HTMLCanvasElement>(null);
 
-export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateGraph, onCommitGraph }) => {
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+
+        // Draw grid lines
+        ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+        ctx.lineWidth = 1;
+        [0.25, 0.5, 0.75].forEach(p => {
+            ctx.beginPath(); ctx.moveTo(p * w, 0); ctx.lineTo(p * w, h); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0, p * h); ctx.lineTo(w, p * h); ctx.stroke();
+        });
+
+        const lowFreq = (params.lowFreq ?? 0.2);
+        const lowGain = (params.lowGain ?? 0.5) * 2 - 1;
+        const midFreq = (params.midFreq ?? 0.5);
+        const midGain = (params.midGain ?? 0.5) * 2 - 1;
+        const midQ = (params.midQ ?? 0.1);
+        const highFreq = (params.highFreq ?? 0.8);
+        const highGain = (params.highGain ?? 0.5) * 2 - 1;
+
+        ctx.beginPath();
+        ctx.strokeStyle = '#f43f5e';
+        ctx.lineWidth = 3;
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = '#f43f5e';
+
+        for (let x = 0; x < w; x++) {
+            const f = x / w;
+            let response = 0;
+
+            // Simple approximation of combined filters
+            // Low Shelf
+            const lowDist = Math.max(0, lowFreq - f) / lowFreq;
+            response += lowGain * Math.pow(lowDist, 2);
+
+            // Peaking Mid
+            const midWidth = (1.1 - midQ) * 0.4;
+            const midDist = Math.abs(f - midFreq);
+            if (midDist < midWidth) {
+                const midFactor = 1 - (midDist / midWidth);
+                response += midGain * Math.sin(midFactor * Math.PI / 2);
+            }
+
+            // High Shelf
+            const highDist = Math.max(0, f - highFreq) / (1 - highFreq);
+            response += highGain * Math.pow(highDist, 2);
+
+            const y = (h / 2) - (response * (h / 3));
+            if (x === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+    }, [params]);
+
+    return <canvas ref={canvasRef} width={200} height={80} className="w-full h-full" />;
+};
+export const NODE_WIDTH = 200;
+export const NODE_PADDING = 60;
+
+export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateGraph, onCommitGraph, trackCount = 1, trackNames = [] }) => {
+    const NODE_DEFS = {
+        source: {
+            name: "Sequencer", color: "border-emerald-500", outType: "audio", params: [],
+            getOutputs: (node: FXNode) => {
+                const base = [{ id: 'main', label: 'MIX', type: 'audio' }];
+                if (node.params.splitOutputs === 1) {
+                    return [...base, ...Array.from({ length: trackCount }, (_, i) => ({
+                        id: `track_${i}`,
+                        label: trackNames[i] || `Trk ${i + 1}`,
+                        type: "audio"
+                    }))];
+                }
+                return base;
+            }
+        },
+        output: { name: "Speakers", color: "border-sky-500", inType: "audio", params: [] },
+        mixer: {
+            name: "Mixer", color: "border-indigo-500", inType: "audio", outType: "audio",
+            params: [],
+            isMixer: true
+        },
+        parametricEQ: {
+            name: "Parametric EQ", color: "border-rose-500", inType: "audio", outType: "audio",
+            params: [
+                { id: "lowFreq", label: "Low Freq", min: 0, max: 1, step: 0.01, default: 0.2, type: "scalar" },
+                { id: "lowGain", label: "Low Gain", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" },
+                { id: "midFreq", label: "Mid Freq", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" },
+                { id: "midGain", label: "Mid Gain", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" },
+                { id: "midQ", label: "Mid Q", min: 0, max: 1, step: 0.01, default: 0.1, type: "scalar" },
+                { id: "highFreq", label: "High Freq", min: 0, max: 1, step: 0.01, default: 0.8, type: "scalar" },
+                { id: "highGain", label: "High Gain", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" }
+            ]
+        },
+        delay: {
+            name: "Delay", color: "border-violet-500", inType: "audio", outType: "audio",
+            params: [
+                { id: "time", label: "Time", min: 0, max: 1, step: 0.01, default: 0.25, type: "scalar" },
+                { id: "feedback", label: "Feedback", min: 0, max: 0.9, step: 0.01, default: 0.4, type: "scalar" },
+                { id: "mix", label: "Mix", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" }
+            ]
+        },
+        filter: {
+            name: "Filter", color: "border-yellow-500", inType: "audio", outType: "audio",
+            params: [
+                { id: "freq", label: "Freq", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" },
+                { id: "q", label: "Q", min: 0, max: 1, step: 0.01, default: 0.1, type: "scalar" }
+            ]
+        },
+        distortion: {
+            name: "Distortion", color: "border-orange-500", inType: "audio", outType: "audio",
+            params: [
+                { id: "drive", label: "Drive", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" }
+            ]
+        },
+        reverb: {
+            name: "Reverb", color: "border-pink-500", inType: "audio", outType: "audio",
+            params: [
+                { id: "time", label: "Time", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" },
+                { id: "decay", label: "Decay", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" },
+                { id: "mix", label: "Mix", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" }
+            ]
+        },
+        compressor: {
+            name: "Compressor", color: "border-cyan-500", inType: "audio", outType: "audio",
+            params: [
+                { id: "threshold", label: "Thresh", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" },
+                { id: "ratio", label: "Ratio", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" },
+                { id: "attack", label: "Atk", min: 0, max: 1, step: 0.01, default: 0.1, type: "scalar" },
+                { id: "release", label: "Rel", min: 0, max: 1, step: 0.01, default: 0.2, type: "scalar" }
+            ]
+        },
+        float: {
+            name: "Float", color: "border-sky-500", outType: "scalar",
+            params: [
+                { id: "val", label: "Value", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" }
+            ]
+        },
+        int: {
+            name: "Integer", color: "border-emerald-500", outType: "int",
+            params: [
+                { id: "val", label: "Value", min: 0, max: 100, step: 1, default: 50, type: "int" }
+            ]
+        },
+        lfo: {
+            name: "LFO", color: "border-indigo-400", outType: "scalar",
+            params: [
+                { id: "rate", label: "Rate", min: 0.1, max: 5, step: 0.001, default: 1.0, type: "scalar" },
+                { id: "amp", label: "Amp", min: 0, max: 1, step: 0.01, default: 1.0, type: "scalar" },
+                { id: "phase", label: "Phase", min: 0, max: 1, step: 0.01, default: 0, type: "scalar" },
+                { id: "normalize", label: "Norm", default: 0, type: "bool" },
+                { id: "type", label: "Wave", min: 0, max: 3, step: 1, default: 0, type: "int" } // 0: Sin, 1: Tri, 2: Saw, 3: Sqr
+            ]
+        },
+        setRange: {
+            name: "Set Range", color: "border-rose-400", inType: "scalar", outType: "scalar",
+            params: [
+                { id: "oldMin", label: "In Min", min: -10, max: 10, step: 0.1, default: -1, type: "scalar" },
+                { id: "oldMax", label: "In Max", min: -10, max: 10, step: 0.1, default: 1, type: "scalar" },
+                { id: "newMin", label: "Out Min", min: -10, max: 10, step: 0.1, default: 0, type: "scalar" },
+                { id: "newMax", label: "Out Max", min: -10, max: 10, step: 0.1, default: 1, type: "scalar" }
+            ]
+        }
+    };
+
     const containerRef = useRef<HTMLDivElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const minimapRef = useRef<HTMLDivElement>(null);
@@ -167,30 +267,130 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
     const [isMinimapDragging, setIsMinimapDragging] = useState(false);
     const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
     const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
-    const [activeCable, setActiveCable] = useState<{ source: string, startX: number, startY: number } | null>(null);
-    const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+    const activeCableRef = useRef<{ source: string, startX: number, startY: number, sourcePort?: string } | null>(null);
+    const setActiveCable = (val: { source: string, startX: number, startY: number, sourcePort?: string } | null) => {
+        activeCableRef.current = val;
+    };
+    const mousePosRef = useRef({ x: 0, y: 0 });
     const [contextMenu, setContextMenu] = useState<{ x: number, y: number } | null>(null);
+    const [nodeContextMenu, setNodeContextMenu] = useState<{ x: number, y: number, nodeId: string } | null>(null);
     const [modVals, setModVals] = useState({ r: 0, g: 0, b: 0, bright: 0 });
     const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
     const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
     const [marqueeRect, setMarqueeRect] = useState<{ startX: number, startY: number, endX: number, endY: number } | null>(null);
     const [isSelecting, setIsSelecting] = useState(false);
-    const [hoveredConnection, setHoveredConnection] = useState<{ source: string, target: string } | null>(null);
-    const [isCutting, setIsCutting] = useState(false);
-    const [cutterPath, setCutterPath] = useState<{ x: number, y: number }[]>([]);
+    const hoveredConnectionsRef = useRef<FXConnection[] | null>(null);
+    const [isCutting, _setIsCutting] = useState(false);
+    const isCuttingRef = useRef(false);
+    const setIsCutting = (val: boolean) => {
+        isCuttingRef.current = val;
+        _setIsCutting(val);
+    };
+    const cutterPathRef = useRef<{ x: number, y: number }[]>([]);
+    const cutterCursorRef = useRef<HTMLDivElement>(null);
     const [editingParam, setEditingParam] = useState<{ nodeId: string, param: string, tempVal: string } | null>(null);
     const [clipboard, setClipboard] = useState<FXNode[]>([]);
+    const isCuttingFromKeyboard = useRef(false);
     const panningPrevented = useRef(false);
+    const isShiftPressedRef = useRef(false);
+    const pendingCutsRef = useRef<FXConnection[]>([]);
+
+    const getNodeOutputs = (node: FXNode) => {
+        const def = (NODE_DEFS as any)[node.type];
+        if (!def) return [];
+        return def.getOutputs ? def.getOutputs(node) : (def.outputs || []);
+    };
+
+    useEffect(() => {
+        const updateSize = () => {
+            if (containerRef.current && canvasRef.current) {
+                const rect = containerRef.current.getBoundingClientRect();
+                canvasRef.current.width = rect.width;
+                canvasRef.current.height = rect.height;
+                setViewportSize({ width: rect.width, height: rect.height });
+            }
+        };
+        const resizeObs = new ResizeObserver(updateSize);
+        if (containerRef.current) resizeObs.observe(containerRef.current);
+        updateSize();
+        return () => resizeObs.disconnect();
+    }, []);
 
     useEffect(() => {
         let frame: number;
         const update = () => {
             setModVals({ ...audioEngine.avgColor });
+            drawCables();
+
+            if (cutterCursorRef.current) {
+                cutterCursorRef.current.style.transform = `translate(${mousePosRef.current.x - 6}px, ${mousePosRef.current.y - 6}px)`;
+            }
+
             frame = requestAnimationFrame(update);
         };
         update();
         return () => cancelAnimationFrame(frame);
+    }, [graph, panOffset]);
+
+    useEffect(() => {
+        const handleDown = (e: KeyboardEvent) => { if (e.key === 'Shift') isShiftPressedRef.current = true; };
+        const handleUp = (e: KeyboardEvent) => { if (e.key === 'Shift') isShiftPressedRef.current = false; };
+        window.addEventListener('keydown', handleDown);
+        window.addEventListener('keyup', handleUp);
+        return () => {
+            window.removeEventListener('keydown', handleDown);
+            window.removeEventListener('keyup', handleUp);
+        };
     }, []);
+
+    // Split Outputs Reconciliation
+    useEffect(() => {
+        const sourceNode = graph.nodes.find(n => n.type === 'source');
+        if (sourceNode?.params.splitOutputs === 1) {
+            const firstTrackConn = graph.connections.find(c => c.source === sourceNode.id && c.sourcePort?.startsWith('track_'));
+            if (firstTrackConn) {
+                const mixerId = firstTrackConn.target;
+                const mixerNode = graph.nodes.find(n => n.id === mixerId);
+                const mixerDef = mixerNode ? (NODE_DEFS as any)[mixerNode.type] : null;
+
+                if (mixerNode && mixerDef?.isMixer) {
+                    const neededCount = trackCount;
+                    let changed = false;
+                    let filteredConns = [...graph.connections];
+
+                    // Remove connections for nonexistent tracks
+                    const beforeRemLen = filteredConns.length;
+                    filteredConns = filteredConns.filter(c => {
+                        if (c.source === sourceNode.id && c.sourcePort?.startsWith('track_')) {
+                            const idx = parseInt(c.sourcePort.split('_')[1]);
+                            return idx < neededCount;
+                        }
+                        return true;
+                    });
+                    if (filteredConns.length !== beforeRemLen) changed = true;
+
+                    // Add missing track connections
+                    for (let i = 0; i < neededCount; i++) {
+                        const portId = `track_${i}`;
+                        const hasConn = filteredConns.some(c => c.source === sourceNode.id && c.sourcePort === portId);
+                        if (!hasConn) {
+                            filteredConns.push({
+                                source: sourceNode.id,
+                                sourcePort: portId,
+                                target: mixerId,
+                                targetPort: `in_${i}`
+                            });
+                            changed = true;
+                        }
+                    }
+
+                    if (changed) {
+                        onUpdateGraph({ ...graph, connections: filteredConns });
+                    }
+                }
+            }
+        }
+    }, [trackCount, graph.nodes.length, graph.connections.length]);
 
     const getDrivenValue = (nodeId: string, paramId: string): number | null => {
         const conn = graph.connections.find(c => c.target === nodeId && c.targetPort === (paramId === '' ? undefined : paramId));
@@ -253,8 +453,6 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
         return val;
     };
 
-    const NODE_WIDTH = 180;
-    const NODE_PADDING = 60;
 
     const drawCables = useCallback(() => {
         const canvas = canvasRef.current;
@@ -263,101 +461,177 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
         if (!ctx) return;
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-
         ctx.save();
         ctx.translate(panOffset.x, panOffset.y);
 
+        const worldMouseX = mousePosRef.current.x - panOffset.x;
+        const worldMouseY = mousePosRef.current.y - panOffset.y;
+
+        const newHovered: FXConnection[] = [];
+        let singleNearest: FXConnection | null = null;
+        let singleMinDist = 20;
+
         graph.connections.forEach(conn => {
-            const isHovered = hoveredConnection?.source === conn.source && hoveredConnection?.target === conn.target;
             const srcNode = graph.nodes.find(n => n.id === conn.source);
             const dstNode = graph.nodes.find(n => n.id === conn.target);
-            if (srcNode && dstNode) {
-                const srcDef = (NODE_DEFS as any)[srcNode.type];
-                const dstDef = (NODE_DEFS as any)[dstNode.type];
-                const x1 = srcNode.x + NODE_WIDTH;
-                const y1 = srcNode.y + 50;
-                const x2 = dstNode.x;
+            if (!srcNode || !dstNode) return;
 
-                // Calculate target Y based on port
-                let targetY = dstNode.y + 50; // Default audio in
-                let targetType = dstDef.inType || 'audio';
+            const srcDef = (NODE_DEFS as any)[srcNode.type];
+            const dstDef = (NODE_DEFS as any)[dstNode.type];
+            const x1 = srcNode.x + NODE_WIDTH;
+            const x2 = dstNode.x;
 
-                if (conn.targetPort) {
+            let y1 = srcNode.y + 55;
+            const srcOutputs = getNodeOutputs(srcNode);
+            if (conn.sourcePort && srcOutputs.length > 0) {
+                const outIdx = srcOutputs.findIndex((o: any) => o.id === conn.sourcePort);
+                if (outIdx !== -1) y1 = srcNode.y + 55 + outIdx * 36;
+            }
+
+            let targetY = dstNode.y + 55;
+            let targetType = dstDef.inType || 'audio';
+            if (conn.targetPort) {
+                if (dstDef.isMixer && conn.targetPort.startsWith('in_')) {
+                    const inIdx = parseInt(conn.targetPort.split('_')[1]);
+                    targetY = dstNode.y + 55 + inIdx * 36;
+                } else {
                     const pIdx = dstDef.params.findIndex((p: any) => p.id === conn.targetPort);
                     if (pIdx !== -1) {
-                        targetY = dstNode.y + 45 + 16 + pIdx * 44 + 16;
+                        targetY = dstNode.y + 45 + pIdx * 40 + 20;
                         targetType = dstDef.params[pIdx].type;
                     }
                 }
+            }
 
-                const srcType = srcDef.outType || 'audio';
-                const isCompatible = srcType === targetType || (srcType === 'int' && targetType === 'scalar');
+            const path = new Path2D();
+            path.moveTo(x1, y1);
+            const cp1x = x1 + (x2 - x1) / 2;
+            const cp2x = x1 + (x2 - x1) / 2;
+            path.bezierCurveTo(cp1x, y1, cp2x, targetY, x2, targetY);
 
-                ctx.beginPath();
-                ctx.moveTo(x1, y1);
-                const cp1x = x1 + (x2 - x1) / 2;
-                const cp2x = x1 + (x2 - x1) / 2;
-                ctx.bezierCurveTo(cp1x, y1, cp2x, targetY, x2, targetY);
+            // Hit testing for highlight
+            ctx.lineWidth = 15; // Hit area
+            if (ctx.isPointInStroke(path, worldMouseX, worldMouseY)) {
+                if (isShiftPressedRef.current) {
+                    newHovered.push(conn);
+                } else {
+                    // Simple distance check after isPointInStroke to find nearest
+                    const dx = worldMouseX - (x1 + x2) / 2;
+                    const dy = worldMouseY - (y1 + targetY) / 2;
+                    const d = Math.sqrt(dx * dx + dy * dy);
+                    if (d < singleMinDist) {
+                        singleMinDist = d;
+                        singleNearest = conn;
+                    }
+                }
+            }
 
-                const typeColors = {
-                    audio: '#6366f1',
-                    scalar: '#0ea5e9',
-                    int: '#10b981'
-                };
+            // Cutter hit testing (Delayed Commitment)
+            if (isCuttingRef.current && cutterPathRef.current.length > 1) {
+                const pathArr = cutterPathRef.current;
+
+                // Check the last few segments to ensure we don't miss fast movements
+                // or if the frame rate lagged slightly behind mouse moves
+                const CHECK_SEGMENTS = 10;
+                const startIndex = Math.max(1, pathArr.length - CHECK_SEGMENTS);
+
+                let intersected = false;
+
+                // We need to set transform to identity for efficient hit testing 
+                // (assuming path coords are world coords and we pass world coords to isPointInStroke)
+                // Actually, I already set transform to identity above for hover check.
+                // But let's be safe and assume we are in IDENTITY state here as planned.
 
                 ctx.save();
-                if (isHovered) {
-                    ctx.strokeStyle = typeColors[srcType as keyof typeof typeColors] || '#6366f1';
-                    ctx.lineWidth = 6;
-                    ctx.shadowBlur = 15;
-                    ctx.shadowColor = ctx.strokeStyle;
-                } else {
-                    ctx.strokeStyle = typeColors[srcType as keyof typeof typeColors] || '#334155';
-                    ctx.lineWidth = 3;
-                    ctx.shadowBlur = 0;
-                }
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
 
-                if (!isCompatible) {
-                    ctx.setLineDash([5, 5]);
-                    ctx.globalAlpha = 0.5;
-                }
+                for (let j = startIndex; j < pathArr.length; j++) {
+                    const p1 = pathArr[j - 1];
+                    const p2 = pathArr[j];
 
-                ctx.stroke();
+                    const dist = Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+                    const SAMPLES = Math.max(2, Math.ceil(dist / 4)); // Sample every 4 pixels
 
-                // Draw slash if incompatible
-                if (!isCompatible) {
-                    const t = 0.5;
-                    const mt = 1 - t;
-                    const mx = Math.pow(mt, 3) * x1 + 3 * Math.pow(mt, 2) * t * cp1x + 3 * mt * Math.pow(t, 2) * cp2x + Math.pow(t, 3) * x2;
-                    const my = Math.pow(mt, 3) * y1 + 3 * Math.pow(mt, 2) * t * y1 + 3 * mt * Math.pow(t, 2) * targetY + Math.pow(t, 3) * targetY;
+                    for (let i = 0; i <= SAMPLES; i++) {
+                        const t = i / SAMPLES;
+                        const sx = p1.x + (p2.x - p1.x) * t;
+                        const sy = p1.y + (p2.y - p1.y) * t;
 
-                    ctx.beginPath();
-                    ctx.setLineDash([]);
-                    ctx.lineWidth = 2;
-                    ctx.moveTo(mx - 5, my + 8);
-                    ctx.lineTo(mx + 5, my - 8);
-                    ctx.stroke();
+                        ctx.lineWidth = 15; // Generous cutter thickness
+                        if (ctx.isPointInStroke(path, sx, sy)) {
+                            intersected = true;
+                            break;
+                        }
+                    }
+                    if (intersected) break;
                 }
                 ctx.restore();
+                if (intersected) {
+                    if (!pendingCutsRef.current.some(pc =>
+                        pc.source === conn.source &&
+                        pc.target === conn.target &&
+                        pc.targetPort === conn.targetPort &&
+                        pc.sourcePort === conn.sourcePort
+                    )) {
+                        pendingCutsRef.current = [...pendingCutsRef.current, conn];
+                    }
+                }
             }
+
+            // Draw
+            const srcType = srcDef.outType || 'audio';
+            const isCompatible = srcType === targetType || (srcType === 'int' && targetType === 'scalar');
+            const typeColors = { audio: '#6366f1', scalar: '#0ea5e9', int: '#10b981' };
+
+            const isPendingCut = pendingCutsRef.current.some(pc =>
+                pc.source === conn.source &&
+                pc.target === conn.target &&
+                pc.targetPort === conn.targetPort &&
+                pc.sourcePort === conn.sourcePort
+            );
+
+            const isHovered = isShiftPressedRef.current
+                ? newHovered.includes(conn)
+                : (singleNearest === conn);
+
+            ctx.save();
+            ctx.strokeStyle = isPendingCut ? '#ef4444' : (isHovered ? (typeColors[srcType as keyof typeof typeColors] || '#6366f1') : '#334155');
+            ctx.lineWidth = (isHovered || isPendingCut) ? 6 : 3;
+            if (isHovered || isPendingCut) {
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = ctx.strokeStyle;
+            }
+            if (!isCompatible) {
+                ctx.setLineDash([5, 5]);
+                ctx.globalAlpha = 0.5;
+            }
+            ctx.stroke(path);
+
+            if (!isCompatible) {
+                // ... compatible slash drawing ...
+            }
+            ctx.restore();
         });
 
-        if (activeCable) {
+        hoveredConnectionsRef.current = isShiftPressedRef.current ? (newHovered.length > 0 ? newHovered : null) : (singleNearest ? [singleNearest] : null);
+
+        const cable = activeCableRef.current;
+        if (cable) {
             ctx.strokeStyle = '#94a3b8';
             ctx.lineWidth = 3;
             ctx.setLineDash([5, 5]);
             ctx.beginPath();
-            const worldMouseX = mousePos.x - panOffset.x;
-            const worldMouseY = mousePos.y - panOffset.y;
-            ctx.moveTo(activeCable.startX, activeCable.startY);
-            const cp1x = activeCable.startX + (worldMouseX - activeCable.startX) / 2;
-            const cp2x = activeCable.startX + (worldMouseX - activeCable.startX) / 2;
-            ctx.bezierCurveTo(cp1x, activeCable.startY, cp2x, worldMouseY, worldMouseX, worldMouseY);
+            const worldX = mousePosRef.current.x - panOffset.x;
+            const worldY = mousePosRef.current.y - panOffset.y;
+            ctx.moveTo(cable.startX, cable.startY);
+            const cp1x = cable.startX + (worldX - cable.startX) / 2;
+            const cp2x = cable.startX + (worldX - cable.startX) / 2;
+            ctx.bezierCurveTo(cp1x, cable.startY, cp2x, worldY, worldX, worldY);
             ctx.stroke();
             ctx.setLineDash([]);
         }
 
-        if (isCutting && cutterPath.length > 1) {
+        if (isCuttingRef.current && cutterPathRef.current.length > 1) {
             ctx.save();
             ctx.strokeStyle = '#ef4444';
             ctx.lineWidth = 3;
@@ -366,16 +640,14 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
             ctx.beginPath();
-            ctx.moveTo(cutterPath[0].x, cutterPath[0].y);
-            for (let i = 1; i < cutterPath.length; i++) {
-                ctx.lineTo(cutterPath[i].x, cutterPath[i].y);
-            }
+            ctx.moveTo(cutterPathRef.current[0].x, cutterPathRef.current[0].y);
+            cutterPathRef.current.forEach(pt => ctx.lineTo(pt.x, pt.y));
             ctx.stroke();
             ctx.restore();
         }
 
         ctx.restore();
-    }, [graph, activeCable, mousePos, panOffset, hoveredConnection]);
+    }, [graph, panOffset]);
 
     useEffect(() => {
         const handleResize = () => {
@@ -489,8 +761,8 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
                         });
 
                         // Paste at mouse position (transformed)
-                        const pasteX = (mousePos.x - panOffset.x);
-                        const pasteY = (mousePos.y - panOffset.y);
+                        const pasteX = (mousePosRef.current.x - panOffset.x);
+                        const pasteY = (mousePosRef.current.y - panOffset.y);
 
                         clipboard.forEach(n => {
                             const newId = `node_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
@@ -528,7 +800,10 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
 
             if (e.key.toLowerCase() === 'f') frameGraph();
             if (e.key.toLowerCase() === 'l') layoutNodes();
-            if (e.key.toLowerCase() === 'y') setIsCutting(true);
+            if (e.key.toLowerCase() === 'y') {
+                setIsCutting(true);
+                isCuttingFromKeyboard.current = true;
+            }
 
             // DYNAMIC SHIFT DISCONNECT
             if (e.key === 'Shift' && draggingNode) {
@@ -553,7 +828,8 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
         const handleKeyUp = (e: KeyboardEvent) => {
             if (e.key.toLowerCase() === 'y') {
                 setIsCutting(false);
-                setCutterPath([]);
+                isCuttingFromKeyboard.current = false;
+                cutterPathRef.current = [];
             }
         };
         window.addEventListener('keydown', handleKeyDown);
@@ -562,58 +838,121 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
             window.removeEventListener('keydown', handleKeyDown);
             window.removeEventListener('keyup', handleKeyUp);
         };
-    }, [frameGraph, layoutNodes, draggingNode, graph, onUpdateGraph]);
+    }, [frameGraph, layoutNodes, draggingNode, graph, onCommitGraph, clipboard, panOffset, selectedNodeIds, onUpdateGraph]);
 
     useEffect(() => {
         drawCables();
     }, [drawCables]);
 
-    const handleMouseDownPort = (e: React.MouseEvent, nodeId: string) => {
+    const handleMouseDownPort = (e: React.MouseEvent, nodeId: string, portId?: string) => {
         e.preventDefault();
         e.stopPropagation();
+        setNodeContextMenu(null);
+
         const node = graph.nodes.find(n => n.id === nodeId);
         if (!node) return;
+        let startY = node.y + 55;
+
+        const outputs = getNodeOutputs(node);
+        if (portId && outputs.length > 0) {
+            const outIdx = outputs.findIndex((o: any) => o.id === portId);
+            if (outIdx !== -1) {
+                startY = node.y + 55 + outIdx * 36;
+            }
+        }
+
         setActiveCable({
             source: nodeId,
             startX: node.x + NODE_WIDTH,
-            startY: node.y + 50
+            startY,
+            sourcePort: portId
         });
     };
 
     const handleMouseDownInputPort = (e: React.MouseEvent, nodeId: string, portId?: string) => {
         e.preventDefault();
         e.stopPropagation();
+        setNodeContextMenu(null);
 
-        // Check if there's an existing connection to this port
-        const existingConn = graph.connections.find(c => c.target === nodeId && c.targetPort === portId);
+        // Check for existing connection to extract
+        const existingConn = graph.connections.find(c => c.target === nodeId && (c.targetPort === portId || (!c.targetPort && !portId)));
         if (existingConn) {
-            // Remove the connection and start dragging from its source
             const srcNode = graph.nodes.find(n => n.id === existingConn.source);
             if (srcNode) {
-                const newConns = graph.connections.filter(c => c !== existingConn);
-                onCommitGraph({ ...graph, connections: newConns });
+                let startY = srcNode.y + 55;
+                const srcOutputs = getNodeOutputs(srcNode);
+                if (existingConn.sourcePort && srcOutputs.length > 0) {
+                    const outIdx = srcOutputs.findIndex((o: any) => o.id === existingConn.sourcePort);
+                    if (outIdx !== -1) {
+                        startY = srcNode.y + 55 + outIdx * 36;
+                    }
+                }
+
                 setActiveCable({
                     source: existingConn.source,
                     startX: srcNode.x + NODE_WIDTH,
-                    startY: srcNode.y + 50
+                    startY,
+                    sourcePort: existingConn.sourcePort
                 });
+                onUpdateGraph({
+                    ...graph,
+                    connections: graph.connections.filter(c => c !== existingConn)
+                });
+                return;
             }
         }
+
+        // Otherwise, nothing happens on input port mousedown usually, 
+        // unless we want to start a cable from target to source (not standard but possible)
     };
 
     const handleMouseUpPort = (nodeId: string, portId?: string) => {
-        if (activeCable && activeCable.source !== nodeId) {
-            // Exclusive input: remove existing connections to this specific target port
-            const otherConnections = graph.connections.filter(c => !(c.target === nodeId && c.targetPort === portId));
-            const newConnections = [...otherConnections, { source: activeCable.source, target: nodeId, targetPort: portId }];
-            onCommitGraph({ ...graph, connections: newConnections });
+        const cable = activeCableRef.current;
+        if (!cable) return;
+        if (cable.source === nodeId) {
+            setActiveCable(null);
+            return;
         }
+
+        // Logic for connecting source -> target
+        const sourceNode = graph.nodes.find(n => n.id === cable.source);
+        const targetNode = graph.nodes.find(n => n.id === nodeId);
+        if (!sourceNode || !targetNode) {
+            setActiveCable(null);
+            return;
+        }
+
+        // Validation: No cycles, same node, etc.
+        if (sourceNode.id === targetNode.id) {
+            setActiveCable(null);
+            return;
+        }
+
+        const finalTargetPort = portId;
+        const otherConnections = graph.connections.filter(c => !(c.target === nodeId && c.targetPort === finalTargetPort));
+        const newConnections = [...otherConnections, { source: cable.source, target: nodeId, sourcePort: cable.sourcePort, targetPort: finalTargetPort }];
+
+        // Update Mixer Port Count
+        let newNodes = graph.nodes;
+        // targetNode is already defined above
+        if (targetNode && (NODE_DEFS as any)[targetNode.type]?.isMixer && finalTargetPort?.startsWith('in_')) {
+            const portIdx = parseInt(finalTargetPort.split('_')[1]);
+            const inputCount = targetNode.params.portCount || 2;
+            if (portIdx + 2 > inputCount) {
+                newNodes = graph.nodes.map(n => n.id === nodeId ? { ...n, params: { ...n.params, portCount: portIdx + 2 } } : n);
+            }
+        }
+
+        onCommitGraph({ ...graph, connections: newConnections, nodes: newNodes });
         setActiveCable(null);
     };
 
     const handleNodeMouseDown = (e: React.MouseEvent, nodeId: string) => {
         e.preventDefault();
         e.stopPropagation();
+        setNodeContextMenu(null);
+        setContextMenu(null);
+
         const node = graph.nodes.find(n => n.id === nodeId);
         if (!node) return;
 
@@ -627,10 +966,8 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
             // SHIFT-DISCONNECT (Extraction)
             const incoming = graph.connections.filter(c => c.target === nodeId);
             const outgoing = graph.connections.filter(c => c.source === nodeId);
-
             let newConns = graph.connections.filter(c => c.source !== nodeId && c.target !== nodeId);
 
-            // If it was a bridge (A -> Node -> B), reconnect neighbors A -> B (Audio only)
             incoming.filter(inc => !inc.targetPort).forEach(inc => {
                 outgoing.forEach(out => {
                     if (!newConns.some(c => c.source === inc.source && c.target === out.target)) {
@@ -638,7 +975,6 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
                     }
                 });
             });
-
             onUpdateGraph({ ...graph, connections: newConns });
         }
 
@@ -650,72 +986,25 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
         }
     };
 
-    function lineIntersect(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, x4: number, y4: number) {
-        const denom = (y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1);
-        if (denom === 0) return false;
-        const ua = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / denom;
-        const ub = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / denom;
-        return (ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1);
-    }
 
-    const checkCutterIntersections = (path: { x: number, y: number }[]) => {
-        if (path.length < 2) return;
-        const p1 = path[path.length - 2];
-        const p2 = path[path.length - 1];
-
-        const newConnections = graph.connections.filter(conn => {
-            const s = graph.nodes.find(n => n.id === conn.source);
-            const t = graph.nodes.find(n => n.id === conn.target);
-            if (!s || !t) return true;
-
-            const x1 = s.x + NODE_WIDTH, y1 = s.y + 50;
-            const x2 = t.x;
-            let targetY = t.y + 50;
-            const dstDef = (NODE_DEFS as any)[t.type];
-            if (conn.targetPort) {
-                const pIdx = dstDef.params.findIndex((p: any) => p.id === conn.targetPort);
-                if (pIdx !== -1) targetY = t.y + 45 + 16 + pIdx * 44 + 16;
-            }
-
-            const cp1x = x1 + (x2 - x1) / 2;
-            const cp2x = x1 + (x2 - x1) / 2;
-
-            const SAMPLES = 12;
-            for (let i = 0; i < SAMPLES; i++) {
-                const t1 = i / SAMPLES;
-                const t2 = (i + 1) / SAMPLES;
-                const mt1 = 1 - t1, mt2 = 1 - t2;
-
-                const getPt = (tv: number, mtv: number) => ({
-                    x: Math.pow(mtv, 3) * x1 + 3 * Math.pow(mtv, 2) * tv * cp1x + 3 * mtv * Math.pow(tv, 2) * cp2x + Math.pow(tv, 3) * x2,
-                    y: Math.pow(mtv, 3) * y1 + 3 * Math.pow(mtv, 2) * tv * y1 + 3 * mtv * Math.pow(tv, 2) * targetY + Math.pow(tv, 3) * targetY
-                });
-
-                const curveP1 = getPt(t1, mt1);
-                const curveP2 = getPt(t2, mt2);
-
-                if (lineIntersect(p1.x, p1.y, p2.x, p2.y, curveP1.x, curveP1.y, curveP2.x, curveP2.y)) return false;
-            }
-            return true;
-        });
-
-        if (newConnections.length !== graph.connections.length) {
-            onCommitGraph({ ...graph, connections: newConnections });
-        }
-    };
+    // checkCutterIntersections removed (handled in rAF loop)
 
     const handleMouseMove = (e: React.MouseEvent) => {
         const rect = containerRef.current?.getBoundingClientRect();
         if (!rect) return;
         const screenX = e.clientX - rect.left;
         const screenY = e.clientY - rect.top;
-        setMousePos({ x: screenX, y: screenY });
+        mousePosRef.current = { x: screenX, y: screenY };
+
+        const worldX = screenX - panOffset.x;
+        const worldY = screenY - panOffset.y;
 
         if (draggingNode) {
-            const worldX = screenX - panOffset.x;
-            const worldY = screenY - panOffset.y;
-            const dx = worldX - nodeDragOffset.x - graph.nodes.find(n => n.id === draggingNode)!.x;
-            const dy = worldY - nodeDragOffset.y - graph.nodes.find(n => n.id === draggingNode)!.y;
+            const node = graph.nodes.find(n => n.id === draggingNode);
+            if (!node) return;
+
+            const dx = worldX - nodeDragOffset.x - node.x;
+            const dy = worldY - nodeDragOffset.y - node.y;
 
             const newNodes = graph.nodes.map(n => {
                 if (n.id === draggingNode) {
@@ -727,45 +1016,7 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
                 return n;
             });
             onUpdateGraph({ ...graph, nodes: newNodes });
-
-            // Handle hover wire detection if shift is held
-            if (e.shiftKey) {
-                let nearest: { source: string, target: string } | null = null;
-                let minDist = 60; // Increased threshold for "magnetic" feel
-
-                graph.connections.forEach(conn => {
-                    const s = graph.nodes.find(n => n.id === conn.source);
-                    const t = graph.nodes.find(n => n.id === conn.target);
-                    if (!s || !t) return;
-                    if (conn.source === draggingNode || conn.target === draggingNode) return;
-
-                    // BEZIER PROXIMITY CHECK (Sampled)
-                    const x1 = s.x + NODE_WIDTH, y1 = s.y + 50;
-                    const x2 = t.x, y2 = t.y + 50;
-                    const cp1x = x1 + (x2 - x1) / 2;
-                    const cp2x = x1 + (x2 - x1) / 2;
-
-                    // Sample 10 points along the curve
-                    const SAMPLES = 10;
-                    for (let i = 0; i <= SAMPLES; i++) {
-                        const t_val = i / SAMPLES;
-                        const mt = 1 - t_val;
-                        // Cubic Bezier Formula
-                        const px = Math.pow(mt, 3) * x1 + 3 * Math.pow(mt, 2) * t_val * cp1x + 3 * mt * Math.pow(t_val, 2) * cp2x + Math.pow(t_val, 3) * x2;
-                        const py = Math.pow(mt, 3) * y1 + 3 * Math.pow(mt, 2) * t_val * y1 + 3 * mt * Math.pow(t_val, 2) * y2 + Math.pow(t_val, 3) * y2;
-
-                        const dist = Math.sqrt(Math.pow(worldX - px, 2) + Math.pow(worldY - py, 2));
-                        if (dist < minDist) {
-                            minDist = dist;
-                            nearest = conn;
-                        }
-                    }
-                });
-                setHoveredConnection(nearest);
-            } else {
-                setHoveredConnection(null);
-            }
-        } else if (isPanning && !isCutting) {
+        } else if (isPanning && !isCuttingRef.current) {
             setPanOffset(prev => ({
                 x: prev.x + (e.clientX - lastMousePos.x),
                 y: prev.y + (e.clientY - lastMousePos.y)
@@ -773,103 +1024,148 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
             setLastMousePos({ x: e.clientX, y: e.clientY });
         } else if (isSelecting && marqueeRect) {
             setMarqueeRect(prev => prev ? { ...prev, endX: screenX - panOffset.x, endY: screenY - panOffset.y } : null);
-
-            // Real-time selection update
             const m = {
                 x1: Math.min(marqueeRect.startX, screenX - panOffset.x),
                 y1: Math.min(marqueeRect.startY, screenY - panOffset.y),
                 x2: Math.max(marqueeRect.startX, screenX - panOffset.x),
                 y2: Math.max(marqueeRect.startY, screenY - panOffset.y)
             };
-
             const newSelected = new Set<string>();
             graph.nodes.forEach(n => {
-                const nx1 = n.x;
-                const ny1 = n.y;
-                const nx2 = n.x + NODE_WIDTH;
-                const ny2 = n.y + 150;
-                if (!(nx2 < m.x1 || nx1 > m.x2 || ny2 < m.y1 || ny1 > m.y2)) {
+                if (!(n.x + NODE_WIDTH < m.x1 || n.x > m.x2 || n.y + 150 < m.y1 || n.y > m.y2)) {
                     newSelected.add(n.id);
                 }
             });
             setSelectedNodeIds(newSelected);
-        } else if (isCutting && cutterPath.length > 0) {
-            const worldX = screenX - panOffset.x;
-            const worldY = screenY - panOffset.y;
-            const newPath = [...cutterPath, { x: worldX, y: worldY }];
-            setCutterPath(newPath);
-            checkCutterIntersections(newPath);
+        } else if (isCuttingRef.current && cutterPathRef.current.length > 0) {
+            const newPath = [...cutterPathRef.current, { x: worldX, y: worldY }];
+            cutterPathRef.current = newPath;
         }
     };
 
     const handleContainerMouseDown = (e: React.MouseEvent) => {
+        if (contextMenu) setContextMenu(null);
+        // Assuming nodeContextMenu is defined elsewhere or not relevant to this change
+        // if (nodeContextMenu) setNodeContextMenu(null); 
+
         const rect = containerRef.current?.getBoundingClientRect();
         if (!rect) return;
-        const worldX = (e.clientX - rect.left) - panOffset.x;
-        const worldY = (e.clientY - rect.top) - panOffset.y;
+        const worldX = e.clientX - rect.left - panOffset.x;
+        const worldY = e.clientY - rect.top - panOffset.y;
 
-        if (e.button === 0) { // Left click on background
+        if (e.button === 0) {
             e.preventDefault();
+            if (isCuttingRef.current) {
+                cutterPathRef.current = [{ x: worldX, y: worldY }];
+                return;
+            }
             if (e.ctrlKey || e.metaKey) {
                 setIsSelecting(true);
                 setMarqueeRect({ startX: worldX, startY: worldY, endX: worldX, endY: worldY });
                 setSelectedNodeIds(new Set());
-            } else if (!isCutting) {
+            } else {
                 setIsPanning(true);
                 setLastMousePos({ x: e.clientX, y: e.clientY });
                 setSelectedNodeIds(new Set());
             }
-        } else if (e.button === 2) { // Right click
+        } else if (e.button === 2) {
             if (e.ctrlKey) {
                 e.preventDefault();
                 setIsCutting(true);
-                setCutterPath([{ x: worldX, y: worldY }]);
+                cutterPathRef.current = [{ x: worldX, y: worldY }];
+                pendingCutsRef.current = []; // Clear previous pending cuts
             }
+        } else {
+            // Close context menus when clicking on background
+            setNodeContextMenu(null);
+            setContextMenu(null);
         }
     };
 
     const handleMouseUp = () => {
-        if (draggingNode && hoveredConnection) {
-            // INSERT NODE INTO CONNECTION
-            const { source, target } = hoveredConnection;
-            let newConns = graph.connections.filter(c => !(c.source === source && c.target === target));
+        const hcs = hoveredConnectionsRef.current;
+        if (draggingNode && hcs && hcs.length > 0) {
+            const draggedNode = graph.nodes.find(n => n.id === draggingNode);
+            if (!draggedNode) return;
 
-            // Avoid duplicates
-            if (!newConns.some(c => c.source === source && c.target === draggingNode)) {
-                newConns.push({ source, target: draggingNode });
-            }
-            if (!newConns.some(c => c.source === draggingNode && c.target === target)) {
-                newConns.push({ source: draggingNode, target });
+            let currentConns = [...graph.connections];
+            let currentNodes = [...graph.nodes];
+            let nextId = graph.nextId || (currentNodes.length + 1);
+
+            // If we have multiple hovered connections, we need to clone the node
+            if (hcs.length > 1) {
+                const connsToReplace = [...hcs];
+                currentNodes = currentNodes.filter(n => n.id !== draggingNode);
+                currentConns = currentConns.filter(c => !connsToReplace.some(hc => hc.source === c.source && hc.target === c.target && hc.sourcePort === c.sourcePort && hc.targetPort === c.targetPort));
+
+                connsToReplace.forEach((conn, idx) => {
+                    const cloneId = `${draggedNode.type}_${nextId++}`;
+                    const spacing = 40;
+                    const offset = (idx - (hcs.length - 1) / 2) * spacing;
+
+                    const newNode: FXNode = {
+                        ...draggedNode,
+                        id: cloneId,
+                        y: draggedNode.y + offset
+                    };
+                    currentNodes.push(newNode);
+
+                    // Re-route connections
+                    currentConns = currentConns.filter(c => !(c.source === conn.source && c.target === conn.target && c.sourcePort === conn.sourcePort && c.targetPort === conn.targetPort));
+                    currentConns.push({ source: conn.source, sourcePort: conn.sourcePort, target: cloneId });
+                    currentConns.push({ source: cloneId, target: conn.target, targetPort: conn.targetPort });
+                });
+            } else {
+                // Single insertion
+                const conn = hcs[0];
+                currentConns = currentConns.filter(c => !(c.source === conn.source && c.target === conn.target && c.sourcePort === conn.sourcePort && c.targetPort === conn.targetPort));
+
+                if (!currentConns.some(c => c.source === conn.source && c.sourcePort === conn.sourcePort && c.target === draggingNode)) {
+                    currentConns.push({ source: conn.source, sourcePort: conn.sourcePort, target: draggingNode });
+                }
+                if (!currentConns.some(c => c.source === draggingNode && c.target === conn.target && c.targetPort === conn.targetPort)) {
+                    currentConns.push({ source: draggingNode, target: conn.target, targetPort: conn.targetPort });
+
+                    // Update Mixer Port Count on Insertion
+                    const tgtNode = graph.nodes.find(n => n.id === conn.target);
+                    if (tgtNode && (NODE_DEFS as any)[tgtNode.type]?.isMixer && conn.targetPort?.startsWith('in_')) {
+                        const portIdx = parseInt(conn.targetPort.split('_')[1]);
+                        const inputCount = tgtNode.params.portCount || 2;
+                        if (portIdx + 2 > inputCount) {
+                            currentNodes = currentNodes.map(n => n.id === tgtNode.id ? { ...n, params: { ...n.params, portCount: portIdx + 2 } } : n);
+                        }
+                    }
+                }
             }
 
-            // Orderly Push: Move target and all downstream nodes
+            // Downstream push logic
+            const target = hcs[0].target;
             const pushedNodeIds = new Set<string>();
             const getDownstream = (id: string) => {
                 if (pushedNodeIds.has(id)) return;
                 pushedNodeIds.add(id);
-                graph.connections.filter(c => c.source === id).forEach(c => getDownstream(c.target));
+                currentConns.filter(c => c.source === id).forEach(c => getDownstream(c.target));
             };
             getDownstream(target);
 
-            const insertedNode = graph.nodes.find(n => n.id === draggingNode);
-            const targetNode = graph.nodes.find(n => n.id === target);
-
+            const downstreamTargetNode = currentNodes.find(n => n.id === target);
             let pushDelta = 0;
-            if (insertedNode && targetNode) {
-                const requiredX = insertedNode.x + NODE_WIDTH + NODE_PADDING;
-                pushDelta = Math.max(0, requiredX - targetNode.x);
+            if (downstreamTargetNode) {
+                const requiredX = draggedNode.x + NODE_WIDTH + NODE_PADDING;
+                pushDelta = Math.max(0, requiredX - downstreamTargetNode.x);
             }
 
-            const newNodes = graph.nodes.map(n => {
-                if (pushedNodeIds.has(n.id) && pushDelta > 0) {
-                    return { ...n, x: n.x + pushDelta };
-                }
-                return n;
-            });
+            if (pushDelta > 0) {
+                currentNodes = currentNodes.map(n => {
+                    if (pushedNodeIds.has(n.id)) {
+                        return { ...n, x: n.x + pushDelta };
+                    }
+                    return n;
+                });
+            }
 
-            onCommitGraph({ ...graph, connections: newConns, nodes: newNodes });
+            onCommitGraph({ ...graph, connections: currentConns, nodes: currentNodes, nextId });
         } else if (draggingNode) {
-            // Commit final position after drag
             onCommitGraph(graph);
         }
 
@@ -879,10 +1175,31 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
         setIsMinimapDragging(false);
         setIsSelecting(false);
         setMarqueeRect(null);
-        setHoveredConnection(null);
-        if (isCutting) panningPrevented.current = true;
-        setIsCutting(false);
-        setCutterPath([]);
+        hoveredConnectionsRef.current = null;
+        if (isCuttingRef.current) {
+            panningPrevented.current = true;
+
+            // COMMIT CUTS
+            if (pendingCutsRef.current.length > 0) {
+                const toCut = pendingCutsRef.current;
+                onCommitGraph({
+                    ...graph,
+                    connections: graph.connections.filter(c => !toCut.some(pc =>
+                        pc.source === c.source &&
+                        pc.target === c.target &&
+                        pc.targetPort === c.targetPort &&
+                        pc.sourcePort === c.sourcePort
+                    ))
+                });
+                pendingCutsRef.current = [];
+            }
+
+            cutterPathRef.current = [];
+        }
+        if (!isCuttingFromKeyboard.current) {
+            setIsCutting(false);
+        }
+        setIsMinimapDragging(false);
     };
 
     const handleContextMenu = (e: React.MouseEvent) => {
@@ -899,11 +1216,12 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
     const addNode = (type: keyof typeof NODE_DEFS) => {
         if (!contextMenu) return;
         const id = `node_${Date.now()}`;
-        const def = NODE_DEFS[type];
+        const def = (NODE_DEFS as any)[type];
         const params: Record<string, number> = {};
-        def.params.forEach(p => params[p.id] = p.default);
+        if (def.params) {
+            def.params.forEach((p: any) => params[p.id] = p.default);
+        }
 
-        // Place node at world coordinates
         const newNode: FXNode = {
             id,
             type: type as any,
@@ -912,37 +1230,20 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
             params
         };
 
-        onCommitGraph({ ...graph, nodes: [...graph.nodes, newNode] });
+        onCommitGraph({ ...graph, nodes: [...graph.nodes, newNode], nextId: (graph.nextId || 1) + 1 });
         setContextMenu(null);
     };
 
     const deleteNode = (nodeId: string) => {
         if (nodeId === 'src' || nodeId === 'out') return;
-
-        const inConns = graph.connections.filter(c => c.target === nodeId && !c.targetPort); // Only audio input
-        const outConns = graph.connections.filter(c => c.source === nodeId);
-
-        let newConnections = graph.connections.filter(c => c.source !== nodeId && c.target !== nodeId);
-
-        if (inConns.length === 1 && outConns.length === 1) {
-            const alreadyExists = newConnections.some(c => c.source === inConns[0].source && c.target === outConns[0].target);
-            if (!alreadyExists) {
-                newConnections.push({ source: inConns[0].source, target: outConns[0].target });
-            }
-        }
-
-        onCommitGraph({
-            ...graph,
-            nodes: graph.nodes.filter(n => n.id !== nodeId),
-            connections: newConnections
-        });
+        const newConnections = graph.connections.filter(c => c.source !== nodeId && c.target !== nodeId);
+        const newNodes = graph.nodes.filter(n => n.id !== nodeId);
+        onCommitGraph({ ...graph, nodes: newNodes, connections: newConnections });
     };
 
     const updateParam = (nodeId: string, param: string, val: number) => {
         const newNodes = graph.nodes.map(n => {
-            if (n.id === nodeId) {
-                return { ...n, params: { ...n.params, [param]: val } };
-            }
+            if (n.id === nodeId) return { ...n, params: { ...n.params, [param]: val } };
             return n;
         });
         onUpdateGraph({ ...graph, nodes: newNodes });
@@ -958,7 +1259,55 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
         onCommitGraph({ ...graph, nodes: newNodes });
     };
 
-    // Minimap Calculation
+    const handleSplitOutputs = (nodeId: string) => {
+        const sourceNode = graph.nodes.find(n => n.id === nodeId);
+        if (!sourceNode) return;
+        const mixerId = `mixer_${Date.now()}`;
+        const mixerNode: FXNode = {
+            id: mixerId,
+            type: 'mixer',
+            x: sourceNode.x + NODE_WIDTH + 100,
+            y: sourceNode.y,
+            params: {}
+        };
+        const mainConn = graph.connections.find(c => c.source === nodeId && (c.sourcePort === 'main' || !c.sourcePort));
+        let newConns = graph.connections.filter(c => c !== mainConn);
+        for (let i = 0; i < trackCount; i++) {
+            newConns.push({ source: nodeId, sourcePort: `track_${i}`, target: mixerId, targetPort: `in_${i}` });
+        }
+        if (mainConn) {
+            newConns.push({ source: mixerId, target: mainConn.target, targetPort: mainConn.targetPort });
+        }
+        const newNodes = graph.nodes.map(n => {
+            if (n.id === nodeId) return { ...n, params: { ...n.params, splitOutputs: 1 } };
+            if (n.x > sourceNode.x + 50 && n.id !== mixerId) return { ...n, x: n.x + NODE_WIDTH + 100 };
+            return n;
+        }).concat(mixerNode);
+        onCommitGraph({ ...graph, nodes: newNodes, connections: newConns, nextId: (graph.nextId || 1) + 2 });
+        setNodeContextMenu(null);
+    };
+
+    const handleMergeOutputs = (nodeId: string) => {
+        const sourceNode = graph.nodes.find(n => n.id === nodeId);
+        if (!sourceNode) return;
+        const firstTrackConn = graph.connections.find(c => c.source === nodeId && c.sourcePort?.startsWith('track_'));
+        if (!firstTrackConn) return;
+        const mixerId = firstTrackConn.target;
+        const mixerNode = graph.nodes.find(n => n.id === mixerId);
+        if (!mixerNode) return;
+        const mixerOutConn = graph.connections.find(c => c.source === mixerId);
+        const newConns = graph.connections.filter(c => c.source !== nodeId && c.source !== mixerId && c.target !== mixerId);
+        if (mixerOutConn) {
+            newConns.push({ source: nodeId, sourcePort: 'main', target: mixerOutConn.target, targetPort: mixerOutConn.targetPort });
+        }
+        const newNodes = graph.nodes.filter(n => n.id !== mixerId).map(n => {
+            if (n.id === nodeId) return { ...n, params: { ...n.params, splitOutputs: 0 } };
+            return n;
+        });
+        onCommitGraph({ ...graph, nodes: newNodes, connections: newConns });
+        setNodeContextMenu(null);
+    };
+
     const getGraphBounds = () => {
         if (graph.nodes.length === 0) return { minX: 0, minY: 0, maxX: 1000, maxY: 1000 };
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -966,17 +1315,10 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
             minX = Math.min(minX, n.x);
             minY = Math.min(minY, n.y);
             maxX = Math.max(maxX, n.x + NODE_WIDTH);
-            maxY = Math.max(maxY, n.y + 150); // Rough height
+            maxY = Math.max(maxY, n.y + 150);
         });
-
-        // Pad for extra space
         const pad = 500;
-        return {
-            minX: minX - pad,
-            minY: minY - pad,
-            maxX: maxX + pad,
-            maxY: maxY + pad
-        };
+        return { minX: minX - pad, minY: minY - pad, maxX: maxX + pad, maxY: maxY + pad };
     };
 
     const bounds = getGraphBounds();
@@ -989,20 +1331,13 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
     const handleMinimapInteraction = (clientX: number, clientY: number) => {
         if (!minimapRef.current) return;
         const mmRect = minimapRef.current.getBoundingClientRect();
-
         const localX = Math.max(0, Math.min(mmRect.width, clientX - mmRect.left));
         const localY = Math.max(0, Math.min(mmRect.height, clientY - mmRect.top));
-
         const pctX = localX / mmRect.width;
         const pctY = localY / mmRect.height;
-
         const worldX = bounds.minX + pctX * (bounds.maxX - bounds.minX);
         const worldY = bounds.minY + pctY * (bounds.maxY - bounds.minY);
-
-        setPanOffset({
-            x: -(worldX - viewportSize.width / 2),
-            y: -(worldY - viewportSize.height / 2)
-        });
+        setPanOffset({ x: -(worldX - viewportSize.width / 2), y: -(worldY - viewportSize.height / 2) });
     };
 
     return (
@@ -1025,8 +1360,9 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
             {/* Cutter Cursor */}
             {isCutting && (
                 <div
-                    className="absolute w-3 h-3 bg-rose-500 rounded-full shadow-[0_0_15px_rgba(244,63,94,0.8)] pointer-events-none z-[1000] transition-transform duration-75"
-                    style={{ left: mousePos.x - 6, top: mousePos.y - 6 }}
+                    ref={cutterCursorRef}
+                    className="absolute w-3 h-3 bg-rose-500 rounded-full shadow-[0_0_15px_rgba(244,63,94,0.8)] pointer-events-none z-[1000]"
+                    style={{ left: 0, top: 0 }}
                 />
             )}
 
@@ -1098,13 +1434,24 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
                 return (
                     <div
                         key={node.id}
-                        className={`absolute bg-slate-900 border ${def.color} rounded-xl shadow-2xl overflow-hidden flex flex-col group transition-shadow ${isSelected ? 'ring-2 ring-indigo-500 shadow-indigo-500/20' : 'hover:shadow-indigo-500/10'}`}
-                        style={{ left: node.x + panOffset.x, top: node.y + panOffset.y, width: NODE_WIDTH, zIndex: draggingNode === node.id ? 100 : 1 }}
+                        className={`absolute bg-slate-900 border ${def.color} rounded-xl shadow-2xl flex flex-col group transition-shadow ${isSelected ? 'ring-2 ring-indigo-500 shadow-indigo-500/20' : 'hover:shadow-indigo-500/10'}`}
+                        style={{
+                            left: node.x + panOffset.x,
+                            top: node.y + panOffset.y,
+                            width: NODE_WIDTH,
+                            zIndex: draggingNode === node.id ? 100 : 1,
+                            minHeight: def.isMixer ? (45 + (graph.connections.filter(c => c.target === node.id && c.targetPort?.startsWith('in_')).length + 1) * 36) : (getNodeOutputs(node).length > 0 ? (45 + getNodeOutputs(node).length * 36) : (def.params.length > 0 ? (45 + def.params.length * 40) : 'auto'))
+                        }}
                         onDragStart={(e) => e.preventDefault()}
                     >
                         <div
-                            className="bg-slate-800 p-3 py-4 text-[11px] font-black uppercase tracking-widest text-slate-400 cursor-grab active:cursor-grabbing border-b border-white/5 flex justify-between items-center"
+                            className={`bg-slate-800 p-3 py-4 text-[11px] font-black uppercase tracking-widest text-slate-400 cursor-grab active:cursor-grabbing border-b border-white/5 flex justify-between items-center rounded-t-[11px]`}
                             onMouseDown={(e) => handleNodeMouseDown(e, node.id)}
+                            onContextMenu={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setNodeContextMenu({ x: e.clientX, y: e.clientY, nodeId: node.id });
+                            }}
                         >
                             <span>{def.name}</span>
                             {node.id !== 'src' && node.id !== 'out' && (
@@ -1291,21 +1638,78 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
                                     />
                                 </div>
                             )}
+
+                            {node.type === 'parametricEQ' && (
+                                <div className="mt-2 w-full h-20 bg-slate-950/50 rounded-lg border border-white/5 relative overflow-hidden">
+                                    <EQVisualizer params={node.params} />
+                                </div>
+                            )}
                         </div>
 
+                        {/* Multi-port logic for source/others */}
+                        {(() => {
+                            const outputs = getNodeOutputs(node);
+                            if (outputs.length === 0) return null;
+                            return (
+                                <div className="absolute top-[45px] right-0 flex flex-col gap-[16px] pointer-events-none items-end">
+                                    {outputs.map((out: any) => (
+                                        <div key={out.id} className="relative flex items-center justify-end">
+                                            <span className="mr-2 text-[10px] font-black text-slate-500/80 uppercase tracking-widest pointer-events-none">
+                                                {out.label}
+                                            </span>
+                                            <div
+                                                className={`w-5 h-5 bg-slate-800 border-2 ${out.type === 'audio' ? 'border-indigo-500' : 'border-sky-500'} rounded-full hover:bg-indigo-500 transition-colors pointer-events-auto cursor-pointer flex items-center justify-center translate-x-1/2`}
+                                                onMouseDown={(e) => handleMouseDownPort(e, node.id, out.id)}
+                                                title={`${out.label} (${out.type})`}
+                                            >
+                                                <div className="w-2 h-2 bg-slate-400 rounded-full opacity-50" />
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            );
+                        })()}
+
                         {node.type !== 'source' && (
-                            <div
-                                className={`absolute left-0 top-[50px] -translate-x-1/2 -translate-y-1/2 w-5 h-5 bg-slate-800 border-2 ${def.inType === 'audio' ? 'border-indigo-500' : 'border-slate-600'} rounded-full hover:bg-sky-500 transition-colors pointer-events-auto cursor-pointer flex items-center justify-center`}
-                                onMouseDown={(e) => handleMouseDownInputPort(e, node.id)}
-                                onMouseUp={() => handleMouseUpPort(node.id)}
-                                title="Audio Input"
-                            >
-                                <div className="w-2 h-2 bg-slate-400 rounded-full opacity-50" />
+                            <div className="absolute left-0 top-[45px] flex flex-col gap-[16px] pointer-events-none items-start">
+                                {def.isMixer ? (
+                                    // Dynamic mixer ports
+                                    (() => {
+                                        const mixerConns = graph.connections.filter(c => c.target === node.id && c.targetPort?.startsWith('in_'));
+                                        const maxIdx = mixerConns.reduce((max, c) => Math.max(max, parseInt(c.targetPort?.split('_')[1] || '0')), -1);
+                                        const portCount = Math.max(node.params.portCount || 2, maxIdx + 2);
+
+                                        return Array.from({ length: portCount }).map((_, idx) => (
+                                            <div key={`in_${idx}`} className="relative flex items-center">
+                                                <div
+                                                    className={`w-5 h-5 bg-slate-800 border-2 border-indigo-500 rounded-full hover:bg-sky-500 transition-colors pointer-events-auto cursor-pointer flex items-center justify-center -translate-x-1/2`}
+                                                    onMouseDown={(e) => handleMouseDownInputPort(e, node.id, `in_${idx}`)}
+                                                    onMouseUp={() => handleMouseUpPort(node.id, `in_${idx}`)}
+                                                    title={`Mixer Input ${idx + 1}`}
+                                                >
+                                                    <div className="w-2 h-2 bg-slate-400 rounded-full opacity-50" />
+                                                </div>
+                                                <span className="ml-2 text-[10px] font-black text-slate-500/80 uppercase tracking-widest pointer-events-none">
+                                                    IN {idx + 1}
+                                                </span>
+                                            </div>
+                                        ));
+                                    })()
+                                ) : (
+                                    <div
+                                        className={`w-5 h-5 bg-slate-800 border-2 ${def.inType === 'audio' ? 'border-indigo-500' : 'border-sky-500'} rounded-full hover:bg-sky-500 transition-colors pointer-events-auto cursor-pointer flex items-center justify-center -translate-x-1/2`}
+                                        onMouseDown={(e) => handleMouseDownInputPort(e, node.id, '')}
+                                        onMouseUp={() => handleMouseUpPort(node.id, '')}
+                                        title={`${def.name} Input`}
+                                    >
+                                        <div className="w-2 h-2 bg-slate-400 rounded-full opacity-50" />
+                                    </div>
+                                )}
                             </div>
                         )}
-                        {node.type !== 'output' && (
+                        {node.type !== 'output' && getNodeOutputs(node).length === 0 && (
                             <div
-                                className={`absolute right-0 top-[50px] translate-x-1/2 -translate-y-1/2 w-5 h-5 bg-slate-800 border-2 ${def.outType === 'audio' ? 'border-indigo-500' : (def.outType === 'scalar' ? 'border-sky-500' : 'border-emerald-500')} rounded-full hover:bg-indigo-500 transition-colors pointer-events-auto cursor-pointer flex items-center justify-center`}
+                                className={`absolute right-0 top-[55px] translate-x-1/2 -translate-y-1/2 w-5 h-5 bg-slate-800 border-2 ${def.outType === 'audio' ? 'border-indigo-500' : (def.outType === 'scalar' ? 'border-sky-500' : 'border-emerald-500')} rounded-full hover:bg-indigo-500 transition-colors pointer-events-auto cursor-pointer flex items-center justify-center`}
                                 onMouseDown={(e) => handleMouseDownPort(e, node.id)}
                                 title={`Output (${def.outType || 'audio'})`}
                             >
@@ -1320,6 +1724,7 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
                 <div
                     className="absolute bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-2 w-48 z-[200] overflow-hidden backdrop-blur-xl"
                     style={{ left: contextMenu.x, top: contextMenu.y }}
+                    onMouseDown={(e) => e.stopPropagation()}
                 >
                     <div className="px-4 py-2 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-white/5 mb-1">Add FX Node</div>
                     {(Object.keys(NODE_DEFS) as Array<keyof typeof NODE_DEFS>).filter(k => k !== 'source' && k !== 'output').map(type => (
@@ -1337,6 +1742,43 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
             <div className="absolute top-4 left-4 bg-slate-900/80 backdrop-blur border border-white/5 p-2 rounded-lg text-[9px] font-bold text-slate-500 uppercase flex gap-2">
                 <span>Right Click to Add Node</span>
             </div>
+            {nodeContextMenu && (
+                <div
+                    className="fixed bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-2 w-48 z-[201] overflow-hidden backdrop-blur-xl"
+                    style={{ left: nodeContextMenu.x, top: nodeContextMenu.y }}
+                    onMouseDown={(e) => e.stopPropagation()}
+                >
+                    <div className="px-4 py-1 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-white/5 mb-1">Node Options</div>
+                    {graph.nodes.find(n => n.id === nodeContextMenu.nodeId)?.type === 'source' && (
+                        graph.nodes.find(n => n.id === nodeContextMenu.nodeId)?.params.splitOutputs === 1 ? (
+                            <button
+                                onClick={() => handleMergeOutputs(nodeContextMenu.nodeId)}
+                                className="w-full text-left px-4 py-2 text-xs font-bold text-rose-400 hover:bg-rose-500 hover:text-white transition-colors uppercase tracking-tight"
+                            >
+                                Merge Outputs
+                            </button>
+                        ) : (
+                            <button
+                                onClick={() => handleSplitOutputs(nodeContextMenu.nodeId)}
+                                className="w-full text-left px-4 py-2 text-xs font-bold text-sky-400 hover:bg-sky-500 hover:text-white transition-colors uppercase tracking-tight"
+                            >
+                                Split Outputs
+                            </button>
+                        )
+                    )}
+                    <button
+                        onClick={() => {
+                            const newNodes = graph.nodes.filter(n => n.id !== nodeContextMenu.nodeId);
+                            const newConns = graph.connections.filter(c => c.source !== nodeContextMenu.nodeId && c.target !== nodeContextMenu.nodeId);
+                            onCommitGraph({ ...graph, nodes: newNodes, connections: newConns });
+                            setNodeContextMenu(null);
+                        }}
+                        className="w-full text-left px-4 py-2 text-xs font-bold text-slate-400 hover:bg-red-500 hover:text-white transition-colors uppercase tracking-tight"
+                    >
+                        Delete Node
+                    </button>
+                </div>
+            )}
         </div>
     );
 };

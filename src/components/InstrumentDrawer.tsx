@@ -75,7 +75,15 @@ export const InstrumentDrawer: React.FC<InstrumentDrawerProps> = ({
     };
 
     return (
-        <div className={`fixed top-[50px] bottom-0 right-0 w-80 bg-slate-900/95 border-l border-white/10 backdrop-blur-xl z-50 transition-transform duration-300 transform ${isOpen ? 'translate-x-0' : 'translate-x-full'} overflow-y-auto`}>
+        <div
+            className={`h-full bg-slate-900 border-r border-white/10 backdrop-blur-xl z-50 transition-all duration-300 transform overflow-y-auto shrink-0`}
+            style={{
+                width: '320px',
+                marginLeft: isOpen ? '0px' : '-320px',
+                opacity: isOpen ? 1 : 0,
+                pointerEvents: isOpen ? 'auto' : 'none'
+            }}
+        >
             {/* Header */}
             <div className="p-4 border-b border-white/10 flex justify-between items-center">
                 <h2 className="text-sm font-black uppercase tracking-widest text-white">

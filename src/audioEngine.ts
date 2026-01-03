@@ -5,13 +5,14 @@ export class AudioEngine {
     ctx: AudioContext | null = null;
     masterGain: GainNode | null = null;
     analyser: AnalyserNode | null = null;
-    sequencerOutput: GainNode | null = null;
+    trackOutputs: GainNode[] = [];
     soundConfig: SoundConfig = { ...DEFAULT_SOUND_CONFIG };
     activeFXNodes: Map<string, any> = new Map();
     avgColor: { r: number, g: number, b: number, bright: number } = { r: 0, g: 0, b: 0, bright: 0 };
     currentFXGraph: FXGraph | null = null;
     lfoStartTime: number = 0;
     bpm: number = 120;
+    sequencerMainOut: GainNode | null = null;
     private lastStructStr: string = "";
     private lastParamsStr: string = "";
 
@@ -31,9 +32,18 @@ export class AudioEngine {
         this.masterGain.connect(this.analyser);
         this.analyser.connect(this.ctx.destination);
 
-        this.sequencerOutput = this.ctx.createGain();
-        // Default connection
-        this.sequencerOutput.connect(this.masterGain);
+        this.sequencerMainOut = this.ctx.createGain();
+        // Disconnect default: we'll connect in rebuildFXGraph
+        // this.sequencerMainOut.connect(this.masterGain);
+
+        this.trackOutputs = [];
+        for (let i = 0; i < 16; i++) {
+            const trackGain = this.ctx.createGain();
+            // Default track connection is to sequencerMainOut (for summing)
+            // but we'll disconnect/connect explicitly in rebuildFXGraph
+            trackGain.connect(this.sequencerMainOut);
+            this.trackOutputs.push(trackGain);
+        }
 
         (window as any).audioEngine = this;
         this.startModulationLoop();
@@ -80,14 +90,14 @@ export class AudioEngine {
         }
     }
 
-    createKick(time: number, rowGain = 0.8, config?: SoundConfig) {
-        if (!this.ctx || !this.sequencerOutput) return;
+    createKick(time: number, rowGain = 0.8, config?: SoundConfig, trackIdx = 0) {
+        if (!this.ctx || !this.trackOutputs[trackIdx]) return;
         const conf = config ? config.kick : this.soundConfig.kick;
 
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
         osc.connect(gain);
-        gain.connect(this.sequencerOutput);
+        gain.connect(this.trackOutputs[trackIdx]);
 
         osc.frequency.setValueAtTime(conf.freq, time);
         osc.frequency.exponentialRampToValueAtTime(0.01, time + conf.decay);
@@ -99,8 +109,8 @@ export class AudioEngine {
         osc.stop(time + conf.decay);
     }
 
-    createSnare(time: number, rowGain = 0.8, config?: SoundConfig) {
-        if (!this.ctx || !this.sequencerOutput) return;
+    createSnare(time: number, rowGain = 0.8, config?: SoundConfig, trackIdx = 0) {
+        if (!this.ctx || !this.trackOutputs[trackIdx]) return;
         const conf = config ? config.snare : this.soundConfig.snare;
 
         const noise = this.ctx.createBufferSource();
@@ -119,7 +129,7 @@ export class AudioEngine {
 
         noise.connect(filter);
         filter.connect(gain);
-        gain.connect(this.sequencerOutput);
+        gain.connect(this.trackOutputs[trackIdx]);
         noise.start(time);
 
         const osc = this.ctx.createOscillator();
@@ -129,13 +139,13 @@ export class AudioEngine {
         oscGain.gain.setValueAtTime((1 - conf.mix) * rowGain, time);
         oscGain.gain.exponentialRampToValueAtTime(0.01, time + 0.1);
         osc.connect(oscGain);
-        oscGain.connect(this.sequencerOutput);
+        oscGain.connect(this.trackOutputs[trackIdx]);
         osc.start(time);
         osc.stop(time + 0.15);
     }
 
-    createHiHat(time: number, rowGain = 0.8, config?: SoundConfig) {
-        if (!this.ctx || !this.sequencerOutput) return;
+    createHiHat(time: number, rowGain = 0.8, config?: SoundConfig, trackIdx = 0) {
+        if (!this.ctx || !this.trackOutputs[trackIdx]) return;
         const conf = config ? config.hat : this.soundConfig.hat;
 
         const bufferSize = this.ctx.sampleRate * 0.05;
@@ -156,14 +166,14 @@ export class AudioEngine {
 
         noise.connect(filter);
         filter.connect(gain);
-        gain.connect(this.sequencerOutput);
+        gain.connect(this.trackOutputs[trackIdx]);
         noise.start(time);
     }
 
-    createSynth(freq: number, time: number, durationSteps = 1, bpm: number, rowGain = 0.8, config?: SoundConfig) {
+    createSynth(freq: number, time: number, durationSteps = 1, bpm: number, rowGain = 0.8, config?: SoundConfig, trackIdx = 0) {
         const secondsPerStep = 60.0 / bpm / 4;
         const durationSecs = durationSteps * secondsPerStep;
-        const voice = this.triggerSynth(freq, rowGain, time, config);
+        const voice = this.triggerSynth(freq, rowGain, time, config, trackIdx);
         if (!voice) return;
 
         const conf = config ? config.synth : this.soundConfig.synth;
@@ -173,8 +183,8 @@ export class AudioEngine {
         voice.osc.stop(time + durationSecs + release + 0.1);
     }
 
-    triggerSynth(freq: number, rowGain = 0.8, startTime?: number, config?: SoundConfig): any {
-        if (!this.ctx || !this.sequencerOutput) return null;
+    triggerSynth(freq: number, rowGain = 0.8, startTime?: number, config?: SoundConfig, trackIdx = 0): any {
+        if (!this.ctx || !this.trackOutputs[trackIdx]) return null;
         const conf = config ? config.synth : this.soundConfig.synth;
 
         const time = startTime || this.ctx.currentTime;
@@ -190,7 +200,7 @@ export class AudioEngine {
 
         osc.connect(filter);
         filter.connect(gain);
-        gain.connect(this.sequencerOutput);
+        gain.connect(this.trackOutputs[trackIdx]);
 
         gain.gain.setValueAtTime(0, time);
         gain.gain.linearRampToValueAtTime(0.1 * rowGain, time + conf.attack);
@@ -214,7 +224,7 @@ export class AudioEngine {
         }
     }
 
-    playStep(grid: Grid, stepIndex: number, time: number, configs: RowConfig[], bpm: number, trackGain: number = 1.0, soundConfig?: SoundConfig) {
+    playStep(grid: Grid, stepIndex: number, time: number, configs: RowConfig[], bpm: number, trackGain: number = 1.0, soundConfig?: SoundConfig, trackIdx = 0) {
         if (!this.ctx) return;
 
         let totalR = 0, totalG = 0, totalB = 0, count = 0;
@@ -227,7 +237,7 @@ export class AudioEngine {
                 const freq = config.type === 'synth' ? config.freq * Math.pow(2, note.oct || 0) : config.freq;
 
                 if (config.type === 'synth') {
-                    this.createSynth(freq, time, note.d, bpm, finalGain, soundConfig);
+                    this.createSynth(freq, time, note.d, bpm, finalGain, soundConfig, trackIdx);
                 } else if (config.type === 'kick' || config.type === 'snare' || config.type === 'hat') {
                     if (note.d > 1) {
                         const totalHits = note.d * 2;
@@ -236,14 +246,14 @@ export class AudioEngine {
                             const hitTime = time + (i * subtickSecs);
                             const velocity = 0.7 + (i / (totalHits - 1)) * 0.3;
                             const hitGain = finalGain * velocity;
-                            if (config.type === 'kick') this.createKick(hitTime, hitGain, soundConfig);
-                            else if (config.type === 'snare') this.createSnare(hitTime, hitGain, soundConfig);
-                            else if (config.type === 'hat') this.createHiHat(hitTime, hitGain, soundConfig);
+                            if (config.type === 'kick') this.createKick(hitTime, hitGain, soundConfig, trackIdx);
+                            else if (config.type === 'snare') this.createSnare(hitTime, hitGain, soundConfig, trackIdx);
+                            else if (config.type === 'hat') this.createHiHat(hitTime, hitGain, soundConfig, trackIdx);
                         }
                     } else {
-                        if (config.type === 'kick') this.createKick(time, finalGain, soundConfig);
-                        else if (config.type === 'snare') this.createSnare(time, finalGain, soundConfig);
-                        else if (config.type === 'hat') this.createHiHat(time, finalGain, soundConfig);
+                        if (config.type === 'kick') this.createKick(time, finalGain, soundConfig, trackIdx);
+                        else if (config.type === 'snare') this.createSnare(time, finalGain, soundConfig, trackIdx);
+                        else if (config.type === 'hat') this.createHiHat(time, finalGain, soundConfig, trackIdx);
                     }
                 }
 
@@ -401,14 +411,28 @@ export class AudioEngine {
         this.lastStructStr = structStr;
         this.lastParamsStr = paramsStr;
         this.currentFXGraph = graph;
-        if (!this.sequencerOutput || !this.masterGain) return;
+        if (!this.trackOutputs.length || !this.masterGain) return;
+
+        // 0. Disconnect EVERYTHING to start from a clean state (Strict Routing)
+        this.sequencerMainOut?.disconnect();
+        this.trackOutputs.forEach(t => t.disconnect());
+
+        // 0b. Cleanup OLD nodes explicitly (before they are cleared)
+        this.activeFXNodes.forEach(node => {
+            if (node.disconnect) {
+                node.disconnect();
+            } else if (node instanceof AudioNode) {
+                node.disconnect();
+            }
+        });
+        this.activeFXNodes.clear();
 
         // 1. Prepare new nodes
         const newFXNodes = new Map<string, any>();
         graph.nodes.forEach(nData => {
             let node;
             if (nData.type === 'source') {
-                node = { input: this.sequencerOutput, output: this.sequencerOutput };
+                node = { isSource: true }; // Placeholder, inputs managed by trackIdx
             } else if (nData.type === 'output') {
                 node = { input: this.masterGain, output: this.masterGain };
             } else {
@@ -417,57 +441,61 @@ export class AudioEngine {
             if (node) newFXNodes.set(nData.id, node);
         });
 
-        // 2. Map internal connections (don't connect to source/output yet)
+        // 2. Map internal connections (including source outputs)
         graph.connections.forEach(conn => {
-            if (conn.source === 'src' || conn.target === 'out') return;
-            const src = newFXNodes.get(conn.source);
             const dst = newFXNodes.get(conn.target);
-            if (src && dst) {
+            if (!dst) return;
+            const dstNode = dst.input || dst;
+
+            if (conn.source === 'src') {
+                // trackOutputs logic
+                if (conn.sourcePort === 'main') {
+                    if (this.sequencerMainOut) {
+                        this.sequencerMainOut.connect(dstNode);
+                    }
+                    return;
+                }
+
+                let trackIdx = 0;
+                if (conn.sourcePort && conn.sourcePort.startsWith('track_')) {
+                    trackIdx = parseInt(conn.sourcePort.split('_')[1]);
+                }
+                const outputNode = this.trackOutputs[trackIdx];
+                if (outputNode) {
+                    outputNode.connect(dstNode);
+                }
+                return;
+            }
+
+            const src = newFXNodes.get(conn.source);
+            if (src && !src.isSource) {
                 const srcNode = src.output || src;
-                const dstNode = dst.input || dst;
                 try { srcNode.connect(dstNode); } catch (e) { }
             }
         });
 
-        // 3. Prepare final stage (connect to masterGain)
-        graph.connections.forEach(conn => {
-            if (conn.target === 'out') {
-                const src = newFXNodes.get(conn.source);
-                if (src) {
-                    const srcNode = src.output || src;
-                    try { srcNode.connect(this.masterGain); } catch (e) { }
+        // 3. Prepare final stage (out connections handled by step 2 if 'out' is a node)
+        const connectedTracks = new Set<number>();
+
+        graph.connections.forEach(c => {
+            if (c.source === 'src') {
+                if (c.sourcePort?.startsWith('track_')) {
+                    connectedTracks.add(parseInt(c.sourcePort.split('_')[1]));
                 }
             }
         });
 
-        // 4. ATOMIC SWAP: Disconnect sequencer and connect to new entry points
-        // We disconnect but immediately reconnect to the new chain to minimize the gap.
-        this.sequencerOutput.disconnect();
+        // In strict mode, if main is not connected to a node, it stays disconnected.
+        // We no longer automatically route to master if not in the graph.
 
-        // 5. Connect entry points
-        let hasEntryConnection = false;
-        graph.connections.forEach(conn => {
-            if (conn.source === 'src') {
-                const dst = newFXNodes.get(conn.target);
-                if (dst) {
-                    const dstNode = dst.input || dst;
-                    try {
-                        this.sequencerOutput!.connect(dstNode);
-                        hasEntryConnection = true;
-                    } catch (e) { }
-                }
+        this.trackOutputs.forEach((output, idx) => {
+            if (!connectedTracks.has(idx)) {
+                // Tracks not explicitly connected in the graph route to the MIX bus.
+                // Note: MIX bus only hits speakers if 'main' port is wired in graph.
+                if (this.sequencerMainOut) output.connect(this.sequencerMainOut);
             }
         });
 
-        // 6. Safety fallback: if nothing is downstream of source, connect to master
-        if (!hasEntryConnection) {
-            try { this.sequencerOutput.connect(this.masterGain); } catch (e) { }
-        }
-
-        // 7. Cleanup old nodes (Web Audio nodes are GC'd when disconnected and unreferenced)
-        this.activeFXNodes.forEach(node => {
-            if (node.disconnect) node.disconnect(); // Some custom nodes have cleanup
-        });
         this.activeFXNodes = newFXNodes;
     }
 
@@ -498,7 +526,18 @@ export class AudioEngine {
                 delay.connect(wet);
                 wet.connect(output);
 
-                return { input, output, delay, feedback, wet, dry, type: 'delay' };
+                const node = {
+                    input, output, delay, feedback, wet, dry, type: 'delay',
+                    disconnect: () => {
+                        input.disconnect();
+                        output.disconnect();
+                        delay.disconnect();
+                        feedback.disconnect();
+                        wet.disconnect();
+                        dry.disconnect();
+                    }
+                };
+                return node;
             }
             case 'filter': {
                 const f = this.ctx.createBiquadFilter();
@@ -530,7 +569,17 @@ export class AudioEngine {
                 input.connect(dry);
                 dry.connect(output);
 
-                return { input, output, convolver, dry, wet, type: 'reverb' };
+                const node = {
+                    input, output, convolver, dry, wet, type: 'reverb',
+                    disconnect: () => {
+                        input.disconnect();
+                        output.disconnect();
+                        convolver.disconnect();
+                        dry.disconnect();
+                        wet.disconnect();
+                    }
+                };
+                return node;
             }
             case 'compressor': {
                 const comp = this.ctx.createDynamicsCompressor();
@@ -539,6 +588,58 @@ export class AudioEngine {
                 comp.attack.value = (p.attack ?? 0.1);
                 comp.release.value = (p.release ?? 0.2);
                 return comp;
+            }
+            case 'mixer': {
+                const input = this.ctx.createGain();
+                const output = this.ctx.createGain();
+                input.gain.value = 1.0;
+                input.connect(output);
+                const node = {
+                    input, output, type: 'mixer',
+                    disconnect: () => {
+                        input.disconnect();
+                        output.disconnect();
+                    }
+                };
+                return node;
+            }
+            case 'parametricEQ': {
+                const input = this.ctx.createGain();
+                const output = this.ctx.createGain();
+                const low = this.ctx.createBiquadFilter();
+                const mid = this.ctx.createBiquadFilter();
+                const high = this.ctx.createBiquadFilter();
+
+                low.type = 'lowshelf';
+                mid.type = 'peaking';
+                high.type = 'highshelf';
+
+                low.frequency.value = (p.lowFreq ?? 0.2) * 500;
+                low.gain.value = (p.lowGain ?? 0.5) * 40 - 20;
+
+                mid.frequency.value = (p.midFreq ?? 0.5) * 4000 + 500;
+                mid.gain.value = (p.midGain ?? 0.5) * 40 - 20;
+                mid.Q.value = (p.midQ ?? 0.1) * 10;
+
+                high.frequency.value = (p.highFreq ?? 0.8) * 10000 + 4000;
+                high.gain.value = (p.highGain ?? 0.5) * 40 - 20;
+
+                input.connect(low);
+                low.connect(mid);
+                mid.connect(high);
+                high.connect(output);
+
+                const node = {
+                    input, output, low, mid, high, type: 'parametricEQ',
+                    disconnect: () => {
+                        input.disconnect();
+                        output.disconnect();
+                        low.disconnect();
+                        mid.disconnect();
+                        high.disconnect();
+                    }
+                };
+                return node;
             }
             default:
                 return this.ctx.createGain();
@@ -594,6 +695,16 @@ export class AudioEngine {
             if (param === 'ratio') node.ratio.setTargetAtTime(value * 20, this.ctx.currentTime, 0.05);
             if (param === 'attack') node.attack.setTargetAtTime(value, this.ctx.currentTime, 0.05);
             if (param === 'release') node.release.setTargetAtTime(value, this.ctx.currentTime, 0.05);
+        } else if (node.type === 'mixer') {
+            if (param === 'gain') node.input.gain.setTargetAtTime(value, this.ctx.currentTime, 0.05);
+        } else if (node.type === 'parametricEQ') {
+            if (param === 'lowFreq') node.low.frequency.setTargetAtTime(value * 500, this.ctx.currentTime, 0.05);
+            if (param === 'lowGain') node.low.gain.setTargetAtTime(value * 40 - 20, this.ctx.currentTime, 0.05);
+            if (param === 'midFreq') node.mid.frequency.setTargetAtTime(value * 4000 + 500, this.ctx.currentTime, 0.05);
+            if (param === 'midGain') node.mid.gain.setTargetAtTime(value * 40 - 20, this.ctx.currentTime, 0.05);
+            if (param === 'midQ') node.mid.Q.setTargetAtTime(value * 10, this.ctx.currentTime, 0.05);
+            if (param === 'highFreq') node.high.frequency.setTargetAtTime(value * 10000 + 4000, this.ctx.currentTime, 0.05);
+            if (param === 'highGain') node.high.gain.setTargetAtTime(value * 40 - 20, this.ctx.currentTime, 0.05);
         }
     }
 }
