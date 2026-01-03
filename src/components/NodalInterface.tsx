@@ -153,7 +153,17 @@ const EQVisualizer: React.FC<{ params: any }> = ({ params }) => {
 export const NODE_WIDTH = 200;
 export const NODE_PADDING = 60;
 
-export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateGraph, onCommitGraph, trackCount = 1, trackNames = [] }) => {
+export interface NodalInterfaceRef {
+    selectAll: () => void;
+}
+
+export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterfaceProps>(({
+    graph,
+    onUpdateGraph,
+    onCommitGraph,
+    trackCount = 1,
+    trackNames = []
+}, ref) => {
     const NODE_DEFS = {
         source: {
             name: "Sequencer", color: "border-emerald-500", outType: "audio", params: [],
@@ -267,12 +277,12 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
     const [isMinimapDragging, setIsMinimapDragging] = useState(false);
     const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
     const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
-    const activeCableRef = useRef<{ source: string, startX: number, startY: number, sourcePort?: string } | null>(null);
-    const setActiveCable = (val: { source: string, startX: number, startY: number, sourcePort?: string } | null) => {
+    const activeCableRef = useRef<{ source: string, startX: number, startY: number, sourcePort?: string, isReverse?: boolean, targetNodeId?: string, targetPortId?: string } | null>(null);
+    const setActiveCable = (val: { source: string, startX: number, startY: number, sourcePort?: string, isReverse?: boolean, targetNodeId?: string, targetPortId?: string } | null) => {
         activeCableRef.current = val;
     };
     const mousePosRef = useRef({ x: 0, y: 0 });
-    const [contextMenu, setContextMenu] = useState<{ x: number, y: number } | null>(null);
+    const [contextMenu, setContextMenu] = useState<{ x: number, y: number, pendingConnection?: any } | null>(null);
     const [nodeContextMenu, setNodeContextMenu] = useState<{ x: number, y: number, nodeId: string } | null>(null);
     const [modVals, setModVals] = useState({ r: 0, g: 0, b: 0, bright: 0 });
     const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
@@ -294,6 +304,15 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
     const panningPrevented = useRef(false);
     const isShiftPressedRef = useRef(false);
     const pendingCutsRef = useRef<FXConnection[]>([]);
+
+    React.useImperativeHandle(ref, () => ({
+        selectAll: () => {
+            const allIds = graph.nodes
+                .filter(n => n.type !== 'source' && n.type !== 'output')
+                .map(n => n.id);
+            setSelectedNodeIds(new Set(allIds));
+        }
+    }));
 
     const getNodeOutputs = (node: FXNode) => {
         const def = (NODE_DEFS as any)[node.type];
@@ -795,6 +814,18 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
                         onCommitGraph({ ...graph, nodes: [...graph.nodes, ...newNodes] });
                         setSelectedNodeIds(new Set(newNodes.map(n => n.id)));
                     }
+                } else if (e.key === 'm' || e.key === 'p') {
+                    // Toggle Bypass
+                    e.preventDefault();
+                    if (selectedNodeIds.size > 0) {
+                        const newNodes = graph.nodes.map(n => {
+                            if (selectedNodeIds.has(n.id)) {
+                                return { ...n, bypass: !n.bypass };
+                            }
+                            return n;
+                        });
+                        onUpdateGraph({ ...graph, nodes: newNodes });
+                    }
                 }
             }
 
@@ -816,8 +847,13 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
                     // Only bridge if it's an audio connection (no targetPort)
                     incoming.filter(inc => !inc.targetPort).forEach(inc => {
                         outgoing.forEach(out => {
-                            if (!newConns.some(c => c.source === inc.source && c.target === out.target)) {
-                                newConns.push({ source: inc.source, target: out.target });
+                            if (!newConns.some(c => c.source === inc.source && c.target === out.target && c.targetPort === out.targetPort)) {
+                                newConns.push({
+                                    source: inc.source,
+                                    sourcePort: inc.sourcePort,
+                                    target: out.target,
+                                    targetPort: out.targetPort
+                                });
                             }
                         });
                     });
@@ -902,8 +938,19 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
             }
         }
 
-        // Otherwise, nothing happens on input port mousedown usually, 
-        // unless we want to start a cable from target to source (not standard but possible)
+        // Otherwise, start REVERSE drag (Input -> Mouse)
+        const rect = containerRef.current?.getBoundingClientRect();
+        const startY = (e.clientY - (rect?.top || 0) - panOffset.y);
+        const startX = (e.clientX - (rect?.left || 0) - panOffset.x);
+
+        setActiveCable({
+            source: "reversed",
+            startX: startX,
+            startY: startY,
+            isReverse: true,
+            targetNodeId: nodeId,
+            targetPortId: portId
+        });
     };
 
     const handleMouseUpPort = (nodeId: string, portId?: string) => {
@@ -932,18 +979,8 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
         const otherConnections = graph.connections.filter(c => !(c.target === nodeId && c.targetPort === finalTargetPort));
         const newConnections = [...otherConnections, { source: cable.source, target: nodeId, sourcePort: cable.sourcePort, targetPort: finalTargetPort }];
 
-        // Update Mixer Port Count
-        let newNodes = graph.nodes;
-        // targetNode is already defined above
-        if (targetNode && (NODE_DEFS as any)[targetNode.type]?.isMixer && finalTargetPort?.startsWith('in_')) {
-            const portIdx = parseInt(finalTargetPort.split('_')[1]);
-            const inputCount = targetNode.params.portCount || 2;
-            if (portIdx + 2 > inputCount) {
-                newNodes = graph.nodes.map(n => n.id === nodeId ? { ...n, params: { ...n.params, portCount: portIdx + 2 } } : n);
-            }
-        }
-
-        onCommitGraph({ ...graph, connections: newConnections, nodes: newNodes });
+        // Update Mixer Dynamic Ports (No state update needed, purely derived)
+        onCommitGraph({ ...graph, connections: newConnections });
         setActiveCable(null);
     };
 
@@ -1082,7 +1119,30 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
         }
     };
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (e: React.MouseEvent) => {
+        // Reverse Wiring: Drop on empty space -> Open Context Menu
+        if (activeCableRef.current?.isReverse) {
+            const cable = activeCableRef.current;
+            // If we are over a port, handleMouseUpPort will handle it (or should). 
+            // But handleMouseUp generally fires on container if not stopped.
+            // Let's assume valid port connection stops propagation or clears activeCable.
+
+            // If we are here, we likely dropped on empty space
+            const rect = containerRef.current?.getBoundingClientRect();
+            if (rect) {
+                setContextMenu({
+                    x: e.clientX - rect.left,
+                    y: e.clientY - rect.top,
+                    pendingConnection: {
+                        targetNodeId: cable.targetNodeId,
+                        targetPortId: cable.targetPortId
+                    }
+                });
+            }
+            setActiveCable(null);
+            return;
+        }
+
         const hcs = hoveredConnectionsRef.current;
         if (draggingNode && hcs && hcs.length > 0) {
             const draggedNode = graph.nodes.find(n => n.id === draggingNode);
@@ -1125,16 +1185,6 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
                 }
                 if (!currentConns.some(c => c.source === draggingNode && c.target === conn.target && c.targetPort === conn.targetPort)) {
                     currentConns.push({ source: draggingNode, target: conn.target, targetPort: conn.targetPort });
-
-                    // Update Mixer Port Count on Insertion
-                    const tgtNode = graph.nodes.find(n => n.id === conn.target);
-                    if (tgtNode && (NODE_DEFS as any)[tgtNode.type]?.isMixer && conn.targetPort?.startsWith('in_')) {
-                        const portIdx = parseInt(conn.targetPort.split('_')[1]);
-                        const inputCount = tgtNode.params.portCount || 2;
-                        if (portIdx + 2 > inputCount) {
-                            currentNodes = currentNodes.map(n => n.id === tgtNode.id ? { ...n, params: { ...n.params, portCount: portIdx + 2 } } : n);
-                        }
-                    }
                 }
             }
 
@@ -1230,7 +1280,52 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
             params
         };
 
-        onCommitGraph({ ...graph, nodes: [...graph.nodes, newNode], nextId: (graph.nextId || 1) + 1 });
+        let initialConnections = [...graph.connections];
+        if (contextMenu.pendingConnection) {
+            // Reverse Wiring: New Node's Output -> Pending Connection's Target (which caused the drag)
+            // But wait, the drag started from an INPUT port.
+            // So we want: New Node [Output] ---> [Input] Target Node (Source of drag)
+
+            // Find a suitable output port on the new node
+            // defaultOutput was unused. 
+            // Actually best to look at getOutputs logic if available or just assume 'main'/'out'
+            // For most nodes, output is implicit or has an 'out' port.
+            // Let's assume standard 'audio' connection from 'main' or implicit source.
+
+            // If the target port expects 'scalar', try to find a scalar output?
+            // For now, let's just make a default connection from the new node.
+
+            // Note: `source` in connection object is the outputting node.
+
+            initialConnections.push({
+                source: id,
+                sourcePort: 'main', // Most nodes use 'main' or undefined. Let's start with 'main' and see if it works for standard FX.
+                // Actually most FX don't specify sourcePort, or use 'main'.
+                // Let's check a standard connection. 'source' usually has no sourcePort for default output?
+                // Looking at standard behavior:
+                // getOutputs returns [{id: 'main', ...}] for sequencer.
+                // For FX nodes like Delay, they have ONE output usually.
+                // Let's leave sourcePort undefined if it's a standard single-output FX?
+                // Or 'main'? 
+                // Let's assume undefined for single-output FX, or 'main' if that's the convention.
+                // The renderer uses `getNodeOutputs`. If that returns nothing, it assumes pass-through? No.
+                // Let's look at `getNodeOutputs` again.
+                // FX nodes like 'delay' have `outType: 'audio'`. 
+                // render loop: `const outputs = getNodeOutputs(node)`.
+                // `getNodeOutputs` implementation: `def.outType ? [{id: 'main', ...}] : ...`?
+                // Let's check `getNodeOutputs` implementation.
+
+                target: contextMenu.pendingConnection.targetNodeId,
+                targetPort: contextMenu.pendingConnection.targetPortId
+            });
+        }
+
+        onCommitGraph({
+            ...graph,
+            nodes: [...graph.nodes, newNode],
+            connections: initialConnections,
+            nextId: (graph.nextId || 1) + 1
+        });
         setContextMenu(null);
     };
 
@@ -1434,13 +1529,13 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
                 return (
                     <div
                         key={node.id}
-                        className={`absolute bg-slate-900 border ${def.color} rounded-xl shadow-2xl flex flex-col group transition-shadow ${isSelected ? 'ring-2 ring-indigo-500 shadow-indigo-500/20' : 'hover:shadow-indigo-500/10'}`}
+                        className={`absolute bg-slate-900 border ${def.color} rounded-xl shadow-2xl flex flex-col group transition-shadow ${isSelected ? 'ring-2 ring-indigo-500 shadow-indigo-500/20' : 'hover:shadow-indigo-500/10'} ${node.bypass ? 'opacity-50 grayscale' : ''}`}
                         style={{
                             left: node.x + panOffset.x,
                             top: node.y + panOffset.y,
                             width: NODE_WIDTH,
                             zIndex: draggingNode === node.id ? 100 : 1,
-                            minHeight: def.isMixer ? (45 + (graph.connections.filter(c => c.target === node.id && c.targetPort?.startsWith('in_')).length + 1) * 36) : (getNodeOutputs(node).length > 0 ? (45 + getNodeOutputs(node).length * 36) : (def.params.length > 0 ? (45 + def.params.length * 40) : 'auto'))
+                            minHeight: def.isMixer ? (45 + (Math.max(2, graph.connections.filter(c => c.target === node.id && c.targetPort?.startsWith('in_')).reduce((max, c) => Math.max(max, parseInt(c.targetPort?.split('_')[1] || '0')), -1) + 2)) * 36) : (getNodeOutputs(node).length > 0 ? (45 + getNodeOutputs(node).length * 36) : (def.params.length > 0 ? (45 + def.params.length * 40) : 'auto'))
                         }}
                         onDragStart={(e) => e.preventDefault()}
                     >
@@ -1677,7 +1772,7 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
                                     (() => {
                                         const mixerConns = graph.connections.filter(c => c.target === node.id && c.targetPort?.startsWith('in_'));
                                         const maxIdx = mixerConns.reduce((max, c) => Math.max(max, parseInt(c.targetPort?.split('_')[1] || '0')), -1);
-                                        const portCount = Math.max(node.params.portCount || 2, maxIdx + 2);
+                                        const portCount = Math.max(2, maxIdx + 2);
 
                                         return Array.from({ length: portCount }).map((_, idx) => (
                                             <div key={`in_${idx}`} className="relative flex items-center">
@@ -1781,4 +1876,4 @@ export const NodalInterface: React.FC<NodalInterfaceProps> = ({ graph, onUpdateG
             )}
         </div>
     );
-};
+});

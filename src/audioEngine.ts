@@ -447,6 +447,11 @@ export class AudioEngine {
             if (!dst) return;
             const dstNode = dst.input || dst;
 
+            if (dst.isBypass) {
+                // If bypassed, ONLY allow main audio input (undefined or 'in_0')
+                if (conn.targetPort && conn.targetPort !== 'in_0') return;
+            }
+
             if (conn.source === 'src') {
                 // trackOutputs logic
                 if (conn.sourcePort === 'main') {
@@ -479,7 +484,8 @@ export class AudioEngine {
 
         graph.connections.forEach(c => {
             if (c.source === 'src') {
-                if (c.sourcePort?.startsWith('track_')) {
+                // Only count as "connected" if the target node actually exists in the graph
+                if (c.sourcePort?.startsWith('track_') && newFXNodes.has(c.target)) {
                     connectedTracks.add(parseInt(c.sourcePort.split('_')[1]));
                 }
             }
@@ -501,6 +507,21 @@ export class AudioEngine {
 
     private createFXNode(nData: FXNode) {
         if (!this.ctx) return null;
+
+        // PASSTHROUGH / BYPASS LOGIC
+        if (nData.bypass) {
+            // Return a simple unity gain node acting as a wire
+            const pass = this.ctx.createGain();
+            pass.gain.value = 1.0;
+            return {
+                input: pass,
+                output: pass,
+                type: 'bypass',
+                isBypass: true, // Marker for connection filtering
+                disconnect: () => pass.disconnect()
+            };
+        }
+
         const p = nData.params || {};
 
         switch (nData.type) {

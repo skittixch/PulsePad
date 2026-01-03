@@ -25,6 +25,7 @@ export interface FXNode {
     y: number;
     params: Record<string, number>;
     modulations?: Record<string, 'red' | 'green' | 'blue' | 'bright' | 'none'>;
+    bypass?: boolean;
 }
 
 export interface FXConnection {

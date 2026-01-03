@@ -173,10 +173,10 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
 
             <div className="flex-1 overflow-y-auto">
                 {tracks.map((track, tIdx) => (
-                    <div key={track.id} className="flex items-center p-1 border-b border-white/5 last:border-0 min-w-max hover:bg-white/[0.02] transition-colors relative">
+                    <div key={track.id} className="flex items-center p-0.5 border-b border-white/5 last:border-0 min-w-max hover:bg-white/[0.02] transition-colors relative">
                         {/* Track Header */}
                         <div
-                            className={`w-28 shrink-0 flex flex-col justify-start p-1.5 border-r border-slate-800 mr-1 cursor-context-menu ${tIdx === editingTrackIndex ? 'opacity-100' : 'opacity-60 hover:opacity-100 transition-opacity'}`}
+                            className={`w-28 shrink-0 flex flex-col justify-start p-1 border-r border-slate-800 mr-1 cursor-context-menu ${tIdx === editingTrackIndex ? 'opacity-100' : 'opacity-60 hover:opacity-100 transition-opacity'}`}
                             onContextMenu={(e) => {
                                 e.preventDefault();
                                 onTrackLoopChange(tIdx, null);
@@ -283,7 +283,7 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
 
                                         <div
                                             draggable
-                                            className={`transition-all duration-300 ${isBeingDragged ? 'w-0 opacity-0 m-0 overflow-hidden' : 'w-auto opacity-100 mr-1 mt-1 mb-1'}`}
+                                            className={`transition-all duration-300 ${isBeingDragged ? 'w-0 opacity-0 m-0 overflow-hidden' : 'w-auto opacity-100 mr-1 mt-0.5 mb-0.5'}`}
                                             onClick={(e) => {
                                                 onToggleFollow(false);
                                                 if (e.shiftKey) {

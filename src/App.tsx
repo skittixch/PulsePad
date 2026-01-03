@@ -3,11 +3,13 @@ import { CanvasSequencer } from './components/CanvasSequencer';
 import { ArrangementView } from './components/ArrangementView';
 import { SpreadsheetView } from './components/SpreadsheetView';
 import { NodalInterface } from './components/NodalInterface';
+import type { NodalInterfaceRef } from './components/NodalInterface';
 import { ScalePieMenu } from './components/ScalePieMenu';
 import { VolumeMeter } from './components/VolumeMeter';
 import { InstrumentDrawer } from './components/InstrumentDrawer';
 import { AuthModal } from './components/AuthModal';
 import { ShareModal } from './components/ShareModal';
+import { SongListModal } from './components/SongListModal';
 import { auth, db } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import type { User } from 'firebase/auth';
@@ -99,10 +101,10 @@ const App: React.FC = () => {
   const [toast, setToast] = useState<{ visible: boolean; message: string }>({ visible: false, message: '' });
   const [snap] = useState<1 | 2 | 4>(1);
   const [isArrOpen, setIsArrOpen] = useState(true);
-  const [arrHeight, setArrHeight] = useState(180);
   const [isResizingArr, setIsResizingArr] = useState(false);
   const [resetArmed, setResetArmed] = useState(false);
   const [selectedNotes, setSelectedNotes] = useState<{ r: number, c: number }[]>([]);
+  const nodalRef = useRef<NodalInterfaceRef>(null);
   const [clipboard, setClipboard] = useState<{ r: number, c: number, note: Note }[] | null>(null);
 
   const [openDrawerTrackIndex, setOpenDrawerTrackIndex] = useState<number | null>(null);
@@ -111,9 +113,38 @@ const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [isSongListOpen, setIsSongListOpen] = useState(false);
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [currentSongId, setCurrentSongId] = useState<string | null>(null);
   const [isPianoMode, setIsPianoMode] = useState(false);
   const [globalOctaveShift, setGlobalOctaveShift] = useState(0);
+
+  const handleLogout = async () => {
+    try {
+      await auth.signOut();
+      setIsProfileMenuOpen(false);
+      setToast({ message: "Logged Out", visible: true });
+    } catch (error) {
+      console.error("Error signing out", error);
+    }
+  };
+
+  const handleLoadSong = (songData: any, songId: string) => {
+    try {
+      if (songData.tracks) setTracks(songData.tracks);
+      if (songData.bpm) setBpm(songData.bpm);
+      if (songData.fxGraph) {
+        setFxGraph(songData.fxGraph);
+        audioEngine.rebuildFXGraph(songData.fxGraph);
+      }
+      if (songData.loops) setTrackLoops(songData.loops);
+      setCurrentSongId(songId);
+      setToast({ message: `Loaded "${songData.name || 'Song'}"`, visible: true });
+    } catch (e) {
+      console.error("Error applying song data", e);
+      setToast({ message: "Error Loading Song", visible: true });
+    }
+  };
   const [activeRowsByKeyboard, setActiveRowsByKeyboard] = useState<Record<number, boolean>>({});
   const keyboardVoicesRef = useRef<Map<string, any>>(new Map());
 
@@ -164,6 +195,14 @@ const App: React.FC = () => {
       soloed: false,
       instrument: DEFAULT_SOUND_CONFIG
     }];
+  });
+
+  const [arrHeight, setArrHeight] = useState(() => {
+    const headerHeight = 40;
+    const trackHeight = 56;
+    const targetHeight = headerHeight + (tracks.length * trackHeight) + 20;
+    // Default cap slightly lower than update cap to be safe on initial load if window is weird, but using window.innerHeight is fine generally
+    return Math.max(80, Math.min(window.innerHeight * 0.8, targetHeight));
   });
 
   const showToast = useCallback((msg: string) => {
@@ -464,6 +503,7 @@ const App: React.FC = () => {
   const startPreview = useCallback((r: number, note?: Note, scaleName: string = currentPart.scale) => {
     audioEngine.init();
     audioEngine.resume();
+    audioEngine.rebuildFXGraph(fxGraph);
     stopPreview();
 
     const config = rowConfigs(scaleName)[r];
@@ -474,11 +514,11 @@ const App: React.FC = () => {
     const soundConfig = currentTrack.instrument;
 
     if (config.type === 'synth') {
-      activePreviewVoiceRef.current = audioEngine.triggerSynth(freq, config.gain, undefined, soundConfig);
-    } else if (config.type === 'kick') audioEngine.createKick(time, config.gain, soundConfig);
-    else if (config.type === 'snare') audioEngine.createSnare(time, config.gain, soundConfig);
-    else if (config.type === 'hat') audioEngine.createHiHat(time, config.gain, soundConfig);
-  }, [rowConfigs, currentPart.scale, stopPreview, currentTrack.instrument]);
+      activePreviewVoiceRef.current = audioEngine.triggerSynth(freq, config.gain, undefined, soundConfig, editingTrackIndex);
+    } else if (config.type === 'kick') audioEngine.createKick(time, config.gain, soundConfig, editingTrackIndex);
+    else if (config.type === 'snare') audioEngine.createSnare(time, config.gain, soundConfig, editingTrackIndex);
+    else if (config.type === 'hat') audioEngine.createHiHat(time, config.gain, soundConfig, editingTrackIndex);
+  }, [rowConfigs, currentPart.scale, stopPreview, currentTrack.instrument, editingTrackIndex, fxGraph]);
 
   const addNote = (r: number, c: number, d: number = 1, data?: Partial<Note>) => {
     const newTracks = [...tracks];
@@ -609,6 +649,7 @@ const App: React.FC = () => {
     commitToHistory(nextTracks);
     setEditingTrackIndex(nextTracks.length - 1);
     setEditingPatternIndex(0);
+    setArrHeight(prev => Math.min(window.innerHeight * 0.8, prev + 60));
   };
 
   const toggleMute = (trackIdx: number) => {
@@ -930,6 +971,7 @@ const App: React.FC = () => {
   const handlePreviewChord = useCallback((scaleName: string, direction: 'up' | 'down') => {
     audioEngine.init();
     audioEngine.resume();
+    audioEngine.rebuildFXGraph(fxGraph);
     const isMajor = scaleName.toLowerCase().includes('major') || scaleName.toLowerCase().includes('maj');
     const intervals = isMajor ? [0, 4, 7, 12] : [0, 3, 7, 12];
 
@@ -942,9 +984,9 @@ const App: React.FC = () => {
     notes.forEach((offset, i) => {
       const time = audioEngine.ctx!.currentTime + (i * 0.005);
       const freq = 440 * Math.pow(2, ((rootSemi + offset + 12) - 57) / 12);
-      audioEngine.createSynth(freq, time, 0.4, bpm, 0.4, currentTrack.instrument);
+      audioEngine.createSynth(freq, time, 0.4, bpm, 0.4, currentTrack.instrument, editingTrackIndex);
     });
-  }, [bpm, currentTrack.instrument]);
+  }, [bpm, currentTrack.instrument, editingTrackIndex, fxGraph]);
 
   useEffect(() => {
     if (toast.visible) {
@@ -1145,6 +1187,21 @@ const App: React.FC = () => {
         duplicatePattern(editingTrackIndex, editingPatternIndex);
         setToast({ message: "Pattern Duplicated", visible: true });
       }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'a' && (e.target as HTMLElement).tagName !== 'INPUT' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        if (viewMode === 'sequencer') {
+          const allNotes: { r: number, c: number }[] = [];
+          currentPart.grid.forEach((row, r) => {
+            row.forEach((cell, c) => {
+              if (cell) allNotes.push({ r, c });
+            });
+          });
+          setSelectedNotes(allNotes);
+          setToast({ message: `Selected ${allNotes.length} notes`, visible: true });
+        } else if (viewMode === 'node') {
+          nodalRef.current?.selectAll();
+        }
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
         e.preventDefault();
         handleCopy();
@@ -1224,7 +1281,7 @@ const App: React.FC = () => {
 
   return (
     <div className="h-screen bg-slate-950 text-slate-100 font-sans p-1 md:p-2 flex flex-col overflow-hidden">
-      <header className="bg-slate-900/90 p-1.5 md:p-2 rounded-xl border border-white/5 backdrop-blur-xl shadow-2xl mb-2 md:mb-3 shrink-0">
+      <header className="bg-slate-900/90 p-1.5 md:p-2 rounded-xl border border-white/5 backdrop-blur-xl shadow-2xl mb-2 md:mb-3 shrink-0 relative z-50">
         <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-3">
@@ -1321,12 +1378,60 @@ const App: React.FC = () => {
           </div>
           <div className="flex items-center gap-2 px-1 md:px-2 border-l border-slate-700">
             <button
-              onClick={() => setIsArrOpen(!isArrOpen)}
-              className={`p-2 rounded-xl border transition-all text-[10px] font-black tracking-widest ${isArrOpen ? 'bg-indigo-500 border-indigo-400 text-white shadow-[0_0_15px_rgba(99,102,241,0.3)]' : 'text-slate-500 border-slate-700 hover:text-white hover:border-slate-500'}`}
-              title="Toggle Arrangement Drawer"
+              onClick={() => user ? setIsShareModalOpen(true) : setIsAuthModalOpen(true)}
+              className="p-2 rounded-xl border border-sky-500/30 bg-sky-500/10 text-sky-400 hover:bg-sky-500 hover:text-white transition-all shadow-[0_0_10px_rgba(14,165,233,0.1)] hover:shadow-[0_0_20px_rgba(14,165,233,0.4)] flex items-center justify-center transform active:scale-95"
+              title={user ? "Save / Share Project" : "Login to Save"}
             >
-              ARR
+              <div className="w-5 h-5">
+                {/* Simplified Floppy Disk */}
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-full h-full">
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                  <polyline points="17 21 17 13 7 13 7 21" />
+                  <polyline points="7 3 7 8 15 8" />
+                </svg>
+              </div>
             </button>
+            {user && (
+              <div className="relative">
+                <button
+                  onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
+                  className="w-8 h-8 rounded-full border border-slate-700 bg-slate-800 overflow-hidden ml-1 hover:border-sky-500 transition-colors focus:outline-none focus:ring-2 focus:ring-sky-500/50"
+                  title={user.displayName || 'User'}
+                >
+                  {user.photoURL ? (
+                    <img src={user.photoURL} alt="Profile" className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-xs font-bold text-slate-500">
+                      {(user.displayName || 'U')[0].toUpperCase()}
+                    </div>
+                  )}
+                </button>
+                {isProfileMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setIsProfileMenuOpen(false)} />
+                    <div className="absolute right-0 top-full mt-2 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-xl z-50 overflow-hidden flex flex-col py-1">
+                      <div className="px-4 py-3 border-b border-slate-800">
+                        <p className="text-white font-bold text-sm truncate">{user.displayName || 'User'}</p>
+                        <p className="text-slate-500 text-[10px] truncate">{user.email}</p>
+                      </div>
+                      <button onClick={() => { setIsSongListOpen(true); setIsProfileMenuOpen(false); }} className="px-4 py-2 text-left text-sm text-slate-300 hover:bg-slate-800 hover:text-white transition-colors flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+                        My Songs
+                      </button>
+                      <button onClick={() => { setToast({ message: "Settings Coming Soon", visible: true }); setIsProfileMenuOpen(false); }} className="px-4 py-2 text-left text-sm text-slate-300 hover:bg-slate-800 hover:text-white transition-colors flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                        Settings
+                      </button>
+                      <div className="h-px bg-slate-800 my-1"></div>
+                      <button onClick={handleLogout} className="px-4 py-2 text-left text-sm text-rose-400 hover:bg-rose-500/10 hover:text-rose-300 transition-colors flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                        Sign Out
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </header>
@@ -1410,6 +1515,7 @@ const App: React.FC = () => {
               )}
               {viewMode === 'node' && (
                 <NodalInterface
+                  ref={nodalRef}
                   graph={fxGraph}
                   onUpdateGraph={setFxGraph}
                   onCommitGraph={(newGraph) => commitToHistory(tracks, newGraph)}
@@ -1429,6 +1535,12 @@ const App: React.FC = () => {
                   setIsResizingArr(true);
                   dragStartYRef.current = e.clientY;
                   dragStartHeightRef.current = arrHeight;
+                }}
+                onDoubleClick={() => {
+                  const headerHeight = 40;
+                  const trackHeight = 56;
+                  const targetHeight = headerHeight + (tracks.length * trackHeight) + 20; // 20px padding buffer
+                  setArrHeight(Math.max(80, Math.min(window.innerHeight * 0.8, targetHeight)));
                 }}
               >
                 <div className={`w-full h-[1px] transition-colors ${isResizingArr ? 'bg-sky-500' : 'bg-slate-800 group-hover:bg-sky-500/50'}`} />
@@ -1514,13 +1626,25 @@ const App: React.FC = () => {
         isOpen={isShareModalOpen}
         onClose={() => setIsShareModalOpen(false)}
         user={user}
-        songData={{ tracks, bpm }}
+        songData={{
+          name: tracks[0]?.name ? `${tracks[0].name.split(' ')[0]} Project` : "New Project",
+          tracks,
+          bpm,
+          fxGraph,
+          loops: trackLoops
+        }}
         currentSongId={currentSongId}
         onSaveComplete={(id) => {
           setCurrentSongId(id);
-          setIsShareModalOpen(false);
-          showToast("Song Saved!");
+          setToast({ message: "Project Saved!", visible: true });
         }}
+      />
+
+      <SongListModal
+        isOpen={isSongListOpen}
+        onClose={() => setIsSongListOpen(false)}
+        user={user}
+        onLoadSong={handleLoadSong}
       />
 
       {isPianoMode && (
