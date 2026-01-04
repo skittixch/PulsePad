@@ -15,4 +15,9 @@ declare module 'firebase/firestore' {
     export const doc: any;
     export const setDoc: any;
     export const getDoc: any;
+    export const query: any;
+    export const where: any;
+    export const orderBy: any;
+    export const getDocs: any;
+    export const deleteDoc: any;
 }

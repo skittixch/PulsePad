@@ -48,6 +48,7 @@ interface CanvasSequencerProps {
     onSetScrollTop: (val: number | ((prev: number) => number)) => void;
     activeRowsByKeyboard?: Record<number, boolean>;
     playheadDistance?: number;
+    paused?: boolean;
 }
 
 const LABEL_WIDTH = 80;
@@ -71,7 +72,8 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
     isUnrolled,
     scrollTop,
     onSetScrollTop,
-    activeRowsByKeyboard = {}
+    activeRowsByKeyboard = {},
+    paused = false
 }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -445,6 +447,7 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
     }, [getColorHex, getBorderColorHex, adjustColor]);
 
     useEffect(() => {
+        if (paused) return;
         let animationFrameId: number;
         const loop = () => {
             drawFrame();
@@ -452,9 +455,9 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
         };
         loop();
         return () => cancelAnimationFrame(animationFrameId);
-    }, [drawFrame]);
+    }, [drawFrame, paused]);
 
-    const getInteractionAt = (e: React.MouseEvent | MouseEvent) => {
+    const getInteractionAt = (e: React.PointerEvent | PointerEvent) => {
         if (!canvasRef.current) return { type: 'empty', r: 0, c: 0 };
         const rect = canvasRef.current.getBoundingClientRect();
         const screenX = e.clientX - rect.left;
@@ -487,7 +490,7 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
         return { type: 'empty', r, c };
     };
 
-    const handleMouseDown = (e: React.MouseEvent) => {
+    const handlePointerDown = (e: React.PointerEvent) => {
         const hit = getInteractionAt(e);
         const startTime = Date.now();
 
@@ -584,7 +587,7 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
         }
     };
 
-    const handleMouseMove = useCallback((e: MouseEvent) => {
+    const handlePointerMove = useCallback((e: PointerEvent) => {
         if (!canvasRef.current) return;
         const currentInteraction = interactionRef.current;
         const rect = canvasRef.current.getBoundingClientRect();
@@ -654,7 +657,7 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
         }
     }, [onPreviewNote]);
 
-    const handleMouseUp = useCallback((e: MouseEvent) => {
+    const handlePointerUp = useCallback((e: PointerEvent) => {
         const currentInteraction = interactionRef.current;
         const isQuickClick = Date.now() - currentInteraction.startTime < 250;
 
@@ -753,14 +756,14 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
 
     useEffect(() => {
         if (interaction.type !== 'idle') {
-            window.addEventListener('mousemove', handleMouseMove);
-            window.addEventListener('mouseup', handleMouseUp);
+            window.addEventListener('pointermove', handlePointerMove);
+            window.addEventListener('pointerup', handlePointerUp);
         }
         return () => {
-            window.removeEventListener('mousemove', handleMouseMove);
-            window.removeEventListener('mouseup', handleMouseUp);
+            window.removeEventListener('pointermove', handlePointerMove);
+            window.removeEventListener('pointerup', handlePointerUp);
         };
-    }, [interaction.type, handleMouseMove, handleMouseUp]);
+    }, [interaction.type, handlePointerMove, handlePointerUp]);
 
     const handleWheel = (e: React.WheelEvent) => {
         const currentInteraction = interactionRef.current;
@@ -813,7 +816,7 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
                     </div>
                 ))}
             </div>
-            <canvas ref={canvasRef} onMouseDown={handleMouseDown} style={{ width: '100%', height: '100%', display: 'block' }} />
+            <canvas ref={canvasRef} onPointerDown={handlePointerDown} style={{ width: '100%', height: '100%', display: 'block' }} />
         </div>
     );
 };

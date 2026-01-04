@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { db } from '../firebase';
-import { collection, query, where, orderBy, getDocs, deleteDoc, doc } from 'firebase/firestore';
+import { collection, query, where, getDocs, deleteDoc, doc } from 'firebase/firestore';
 import type { User } from 'firebase/auth';
 
 interface SongListModalProps {
@@ -28,13 +28,19 @@ export const SongListModal: React.FC<SongListModalProps> = ({ isOpen, onClose, u
             const q = query(
                 collection(db, 'songs'),
                 where('userId', '==', user.uid),
-                orderBy('createdAt', 'desc')
+                where('userId', '==', user.uid)
             );
             const snapshot = await getDocs(q);
-            const songList = snapshot.docs.map((doc: any) => ({
-                id: doc.id,
-                ...doc.data()
-            }));
+            const songList = snapshot.docs
+                .map((doc: any) => ({
+                    id: doc.id,
+                    ...doc.data()
+                }))
+                .sort((a: any, b: any) => {
+                    const tA = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+                    const tB = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+                    return tB - tA; // desc
+                });
             setSongs(songList);
         } catch (error) {
             console.error("Error fetching songs:", error);

@@ -8,7 +8,10 @@ interface NodalInterfaceProps {
     onCommitGraph: (graph: FXGraph) => void;
     trackCount?: number;
     trackNames?: string[];
+    paused?: boolean;
 }
+
+
 
 const LFOVisualizer: React.FC<{ rate: number, amp: number, type: number, phase: number, normalize: boolean }> = ({ rate, amp, type, phase, normalize }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -157,13 +160,18 @@ export interface NodalInterfaceRef {
     selectAll: () => void;
 }
 
+
 export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterfaceProps>(({
     graph,
     onUpdateGraph,
     onCommitGraph,
     trackCount = 1,
-    trackNames = []
+    trackNames = [],
+    paused = false
 }, ref) => {
+    // ...
+
+
     const NODE_DEFS = {
         source: {
             name: "Sequencer", color: "border-emerald-500", outType: "audio", params: [],
@@ -186,7 +194,7 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
             isMixer: true
         },
         parametricEQ: {
-            name: "Parametric EQ", color: "border-rose-500", inType: "audio", outType: "audio",
+            name: "EQ", color: "border-rose-500", inType: "audio", outType: "audio",
             params: [
                 { id: "lowFreq", label: "Low Freq", min: 0, max: 1, step: 0.01, default: 0.2, type: "scalar" },
                 { id: "lowGain", label: "Low Gain", min: 0, max: 1, step: 0.01, default: 0.5, type: "scalar" },
@@ -304,6 +312,25 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
     const panningPrevented = useRef(false);
     const isShiftPressedRef = useRef(false);
     const pendingCutsRef = useRef<FXConnection[]>([]);
+
+
+    // rAF Loop Update
+    useEffect(() => {
+        let frame: number;
+        const update = () => {
+            if (!paused) {
+                setModVals({ ...audioEngine.avgColor });
+                drawCables();
+
+                if (cutterCursorRef.current) {
+                    cutterCursorRef.current.style.transform = `translate(${mousePosRef.current.x - 6}px, ${mousePosRef.current.y - 6}px)`;
+                }
+            }
+            frame = requestAnimationFrame(update);
+        };
+        update();
+        return () => cancelAnimationFrame(frame);
+    }, [graph, panOffset, paused]);
 
     React.useImperativeHandle(ref, () => ({
         selectAll: () => {
@@ -738,13 +765,15 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
             if (e.key === 'Delete' || e.key === 'Backspace') {
                 if (selectedNodeIds.size > 0) {
                     const protectedIds = new Set(['src', 'out']);
-                    const newNodes = graph.nodes.filter(n => !selectedNodeIds.has(n.id) || protectedIds.has(n.id));
-                    const newConnections = graph.connections.filter(c =>
-                        (!selectedNodeIds.has(c.source) || protectedIds.has(c.source)) &&
-                        (!selectedNodeIds.has(c.target) || protectedIds.has(c.target))
-                    );
-                    onCommitGraph({ ...graph, nodes: newNodes, connections: newConnections });
-                    setSelectedNodeIds(new Set());
+                    const nodesToDelete = Array.from(selectedNodeIds).filter(id => !protectedIds.has(id));
+
+                    if (nodesToDelete.length > 0) {
+                        const newConnections = healConnections(nodesToDelete, graph);
+                        const newNodes = graph.nodes.filter(n => !selectedNodeIds.has(n.id) || protectedIds.has(n.id));
+
+                        onCommitGraph({ ...graph, nodes: newNodes, connections: newConnections });
+                        setSelectedNodeIds(new Set());
+                    }
                 }
             }
 
@@ -976,6 +1005,11 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
         }
 
         const finalTargetPort = portId;
+
+        // Strict Input Constraint: Remove any existing connection to this specific target port
+        // Unless it's a Mixer input which might support multiple? No, Mixer inputs are separate ports (in_0, in_1).
+        // So yes, strictly remove existing connections to this port.
+
         const otherConnections = graph.connections.filter(c => !(c.target === nodeId && c.targetPort === finalTargetPort));
         const newConnections = [...otherConnections, { source: cable.source, target: nodeId, sourcePort: cable.sourcePort, targetPort: finalTargetPort }];
 
@@ -1329,10 +1363,57 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
         setContextMenu(null);
     };
 
+    const healConnections = (nodesToDelete: string[], graphState: FXGraph) => {
+        let currentConns = [...graphState.connections];
+
+        nodesToDelete.forEach(nodeId => {
+            const incoming = currentConns.filter(c => c.target === nodeId);
+            const outgoing = currentConns.filter(c => c.source === nodeId);
+
+            // AUTO-HEAL: Bridge inputs to outputs
+            // Only strictly if it's an audio-to-audio path (no targetPort usually)
+            // But let's be generous: if I delete a node, I want the 'main' flow to persist.
+
+            incoming.forEach(inc => {
+                // Determine if 'inc' is an audio connection (no targetPort or known audio port)
+                // const nodeDef = (NODE_DEFS as any)[graphState.nodes.find(n => n.id === nodeId)?.type || ''];
+                // If the connection was into a parameter, don't bridge it to audio output
+                if (inc.targetPort && !inc.targetPort.startsWith('in_')) return;
+
+                outgoing.forEach(out => {
+                    // Only bridge if we aren't creating a duplicate connection
+                    if (!currentConns.some(c => c.source === inc.source && c.target === out.target && c.targetPort === out.targetPort)) {
+                        // Check for port compatibility/existence
+                        // If 'out' came from 'main' (or undefined sourcePort) of the deleted node, it's a candidate
+                        // If 'out' came from a split output (track_0), maybe we shouldn't bridge a main input to it? 
+                        // Yes, usually we bridge main-in to main-out.
+
+                        const isMainOut = !out.sourcePort || out.sourcePort === 'main';
+                        if (isMainOut) {
+                            currentConns.push({
+                                source: inc.source,
+                                sourcePort: inc.sourcePort,
+                                target: out.target,
+                                targetPort: out.targetPort
+                            });
+                        }
+                    }
+                });
+            });
+
+            // Remove connections involving deleted node
+            currentConns = currentConns.filter(c => c.source !== nodeId && c.target !== nodeId);
+        });
+
+        return currentConns;
+    }
+
     const deleteNode = (nodeId: string) => {
         if (nodeId === 'src' || nodeId === 'out') return;
-        const newConnections = graph.connections.filter(c => c.source !== nodeId && c.target !== nodeId);
+
+        const newConnections = healConnections([nodeId], graph);
         const newNodes = graph.nodes.filter(n => n.id !== nodeId);
+
         onCommitGraph({ ...graph, nodes: newNodes, connections: newConnections });
     };
 
@@ -1355,6 +1436,7 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
     };
 
     const handleSplitOutputs = (nodeId: string) => {
+        // ... (No logic needed to change here, but function was in the range)
         const sourceNode = graph.nodes.find(n => n.id === nodeId);
         if (!sourceNode) return;
         const mixerId = `mixer_${Date.now()}`;
@@ -1367,7 +1449,7 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
         };
         const mainConn = graph.connections.find(c => c.source === nodeId && (c.sourcePort === 'main' || !c.sourcePort));
         let newConns = graph.connections.filter(c => c !== mainConn);
-        for (let i = 0; i < trackCount; i++) {
+        for (let i = 0; i < (trackCount || 1); i++) {
             newConns.push({ source: nodeId, sourcePort: `track_${i}`, target: mixerId, targetPort: `in_${i}` });
         }
         if (mainConn) {
@@ -1388,8 +1470,7 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
         const firstTrackConn = graph.connections.find(c => c.source === nodeId && c.sourcePort?.startsWith('track_'));
         if (!firstTrackConn) return;
         const mixerId = firstTrackConn.target;
-        const mixerNode = graph.nodes.find(n => n.id === mixerId);
-        if (!mixerNode) return;
+        // ...
         const mixerOutConn = graph.connections.find(c => c.source === mixerId);
         const newConns = graph.connections.filter(c => c.source !== nodeId && c.source !== mixerId && c.target !== mixerId);
         if (mixerOutConn) {

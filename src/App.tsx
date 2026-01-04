@@ -10,16 +10,16 @@ import { InstrumentDrawer } from './components/InstrumentDrawer';
 import { AuthModal } from './components/AuthModal';
 import { ShareModal } from './components/ShareModal';
 import { SongListModal } from './components/SongListModal';
+import { WelcomeOverlay } from './components/WelcomeOverlay';
+import { VirtualKeyboard } from './components/VirtualKeyboard';
 import { auth, db } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import type { User } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
-import type { Note, RowConfig, Grid, FXGraph, Track, TrackPart, SoundConfig } from './types';
+import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import type { Note, RowConfig, Grid, FXGraph, FXNode, Track, TrackPart, SoundConfig } from './types';
 import { STEPS_PER_PATTERN, SCALES, DEFAULT_DRUM_ROWS, generateBlankGrid, getLabelSemitones, getRowConfigs, NOTE_TO_SEMI, DEFAULT_SOUND_CONFIG } from './constants';
 import { DRUM_ARCHIVE } from './drumPatterns';
 import { audioEngine } from './audioEngine';
-
-
 
 const remapGrid = (sourcePart: TrackPart, targetScaleName: string, targetUnrolled: boolean, sourceUnrolled: boolean): Grid => {
   const sourceConfigs = getRowConfigs(sourcePart.scale, sourceUnrolled);
@@ -97,10 +97,11 @@ const App: React.FC = () => {
   const [isUnrolled, setIsUnrolled] = useState(false);
 
   const [viewMode, setViewMode] = useState<'sequencer' | 'node' | 'spreadsheet'>('sequencer');
-  const [masterVolume] = useState(0.8);
+  const [showKeyboard, setShowKeyboard] = useState(false);
   const [toast, setToast] = useState<{ visible: boolean; message: string }>({ visible: false, message: '' });
+  const [masterVolume] = useState(0.8);
   const [snap] = useState<1 | 2 | 4>(1);
-  const [isArrOpen, setIsArrOpen] = useState(true);
+  const [isArrOpen] = useState(true);
   const [isResizingArr, setIsResizingArr] = useState(false);
   const [resetArmed, setResetArmed] = useState(false);
   const [selectedNotes, setSelectedNotes] = useState<{ r: number, c: number }[]>([]);
@@ -129,17 +130,83 @@ const App: React.FC = () => {
     }
   };
 
+  // Sanitize FX Graph data to prevent audio engine crashes
+  const sanitizeFXGraph = (graph: FXGraph): FXGraph => {
+    if (!graph || !Array.isArray(graph.nodes)) return { nodes: [], connections: [] };
+
+    let nodes = [...graph.nodes];
+    const nodeIds = new Set(nodes.map(n => n.id));
+
+    // Ensure Output node exists
+    if (!nodes.find(n => n.type === 'output')) {
+      const outputNode: FXNode = { id: 'output', type: 'output', x: 800, y: 300, params: {} };
+      nodes.push(outputNode);
+      nodeIds.add('output');
+    }
+
+    // Filter invalid connections
+    const validConnections = (graph.connections || []).filter(conn => {
+      const srcExists = conn.source === 'src' || nodeIds.has(conn.source);
+      const targetExists = nodeIds.has(conn.target);
+      return srcExists && targetExists;
+    });
+
+    return {
+      nodes,
+      connections: validConnections,
+      nextId: graph.nextId || Math.max(0, ...nodes.filter(n => n.id.startsWith('node_')).map(n => parseInt(n.id.split('_')[1]))) + 1
+    };
+  };
+
   const handleLoadSong = (songData: any, songId: string) => {
     try {
-      if (songData.tracks) setTracks(songData.tracks);
-      if (songData.bpm) setBpm(songData.bpm);
-      if (songData.fxGraph) {
-        setFxGraph(songData.fxGraph);
-        audioEngine.rebuildFXGraph(songData.fxGraph);
+      const parsed = typeof songData === 'string' ? JSON.parse(songData) : songData;
+      if (!parsed) return;
+
+      const newTracks = parsed.tracks || tracks; // Fallback to current if missing (shouldn't happen on good save)
+      const newBpm = parsed.bpm || 120;
+
+      // SANITIZE GRAPH
+      let newGraph = parsed.fxGraph;
+      if (newGraph) {
+        newGraph = sanitizeFXGraph(newGraph);
+      } else {
+        newGraph = {
+          nodes: [{ id: 'output', type: 'output', x: 800, y: 300, params: {} }],
+          connections: []
+        };
       }
-      if (songData.loops) setTrackLoops(songData.loops);
+
+      setTracks(newTracks);
+      setBpm(newBpm);
+      setFxGraph(newGraph);
+      // Audio engine rebuild handled by useEffect on fxGraph change? 
+      // Actually App.tsx usually syncs fxGraph to audioEngine. Let's explicitly rebuild to be safe or rely on the effect.
+      // Looking at the old code: "audioEngine.rebuildFXGraph(songData.fxGraph);"
+      // There is likely a useEffect(() => { audioEngine.rebuildFXGraph(fxGraph) }, [fxGraph]) somewhere. 
+      // If not, we should call it. But wait, strict mode might double build. 
+      // Let's call it to ensure immediate sync.
+      audioEngine.rebuildFXGraph(newGraph);
+
+      if (parsed.loops) setTrackLoops(parsed.loops);
+
       setCurrentSongId(songId);
-      setToast({ message: `Loaded "${songData.name || 'Song'}"`, visible: true });
+      setEditingTrackIndex(0);
+      setEditingPatternIndex(0);
+
+      // Welcome Data
+      if (parsed.welcomeData) {
+        setWelcomeData(parsed.welcomeData);
+      } else if (parsed.name) {
+        setWelcomeData({
+          name: parsed.name,
+          authorName: parsed.authorName,
+          authorPhotoUrl: parsed.authorPhotoUrl,
+          linerNotes: parsed.linerNotes
+        });
+      }
+
+      setToast({ message: `Loaded "${parsed.name || 'Song'}"`, visible: true });
     } catch (e) {
       console.error("Error applying song data", e);
       setToast({ message: "Error Loading Song", visible: true });
@@ -147,6 +214,7 @@ const App: React.FC = () => {
   };
   const [activeRowsByKeyboard, setActiveRowsByKeyboard] = useState<Record<number, boolean>>({});
   const keyboardVoicesRef = useRef<Map<string, any>>(new Map());
+  const [welcomeData, setWelcomeData] = useState<any>(null);
 
   const [fxGraph, setFxGraph] = useState<FXGraph>(() => {
     const saved = localStorage.getItem('pulse_fx_graph');
@@ -228,11 +296,16 @@ const App: React.FC = () => {
           if (docSnap.exists()) {
             const data = docSnap.data();
             const parsedData = JSON.parse(data.data);
-            if (parsedData.tracks && parsedData.bpm) {
-              setTracks(parsedData.tracks);
-              setBpm(parsedData.bpm);
-              setCurrentSongId(songId);
-              showToast(`Loaded "${data.name}"`);
+            handleLoadSong(parsedData, songId);
+
+            // Show welcome screen if data exists
+            if (data.linerNotes || data.authorName) {
+              setWelcomeData({
+                name: data.name,
+                authorName: data.authorName,
+                authorPhotoUrl: data.authorPhotoUrl,
+                linerNotes: data.linerNotes
+              });
             }
           } else {
             showToast("Song not found.");
@@ -253,9 +326,19 @@ const App: React.FC = () => {
   const currentPart = currentTrack.parts[editingPatternIndex] || currentTrack.parts[0];
 
   useEffect(() => {
-    const PIANO_KEYS = ['KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyG', 'KeyH', 'KeyJ', 'KeyK', 'KeyL', 'Semicolon', 'Quote'];
+    // Piano keys extended to include Backslash
+    const EXTENDED_PIANO_KEYS = [
+      'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyG', 'KeyH', 'KeyJ', 'KeyK', 'KeyL', 'Semicolon', 'Quote', 'Backslash'
+    ];
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Toggle View Mode with TAB
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        setViewMode(prev => prev === 'sequencer' ? 'node' : 'sequencer');
+        return;
+      }
+
       // Toggle Piano Mode based on CapsLock
       const capsOn = e.getModifierState('CapsLock');
       setIsPianoMode(capsOn);
@@ -282,9 +365,44 @@ const App: React.FC = () => {
 
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
+
         if (user) {
-          setIsShareModalOpen(true);
+          if (currentSongId) {
+            // Quick Save
+            const saveSong = async () => {
+              setToast({ message: "Saving...", visible: true });
+              try {
+                const songPayload = {
+                  data: JSON.stringify({
+                    name: welcomeData?.name || tracksRef.current[0]?.name || "Pulse Project",
+                    tracks: tracksRef.current,
+                    bpm: bpmRef.current,
+                    fxGraph: fxGraphRef.current,
+                    loops: trackLoopsRef.current
+                  }),
+                  updatedAt: serverTimestamp(),
+                  authorName: user.displayName || 'Anonymous',
+                  authorPhotoUrl: user.photoURL
+                };
+
+                await setDoc(doc(db, 'songs', currentSongId), songPayload, { merge: true });
+
+                // Copy Link
+                const link = `${window.location.origin}?song=${currentSongId}`;
+                await navigator.clipboard.writeText(link);
+
+                setToast({ message: "Saved & Link Copied!", visible: true });
+              } catch (err) {
+                console.error("Quick Save Failed", err);
+                setToast({ message: "Save Failed", visible: true });
+              }
+            };
+            saveSong();
+          } else {
+            setIsShareModalOpen(true);
+          }
         } else {
+          // Logged OUT: Always prompt login
           setIsAuthModalOpen(true);
         }
         return;
@@ -303,7 +421,7 @@ const App: React.FC = () => {
 
       if (capsOn) {
         setIsPianoMode(true);
-        const keyIndex = PIANO_KEYS.indexOf(e.code);
+        const keyIndex = EXTENDED_PIANO_KEYS.indexOf(e.code);
         if (keyIndex !== -1) {
           e.preventDefault();
           if (keyboardVoicesRef.current.has(e.code)) return; // No repeat
@@ -311,6 +429,11 @@ const App: React.FC = () => {
           const configs = getRowConfigs(currentPart.scale, isUnrolled);
           const drumCount = 3; // hat, snare, kick
           const synthRowCount = configs.length - drumCount;
+
+          // Mapping:
+          // 0,1,2 -> Drums (A, S, D)
+          // 3..N -> Synths (F... )
+
           let targetRow = -1;
 
           if (keyIndex === 0) targetRow = synthRowCount + 2; // A -> Kick
@@ -318,10 +441,25 @@ const App: React.FC = () => {
           else if (keyIndex === 2) targetRow = synthRowCount + 0; // D -> Hat
           else {
             const synthIndex = keyIndex - 3;
-            targetRow = (synthRowCount - 1) - synthIndex;
+            // Rows are ordered top-to-bottom in array? Or bottom-to-top?
+            // "targetRow = (synthRowCount - 1) - synthIndex" implies Array[0] is HIGH pitch, Array[Last] is LOW pitch.
+            // So index 0 (F) maps to Lowest Synth Row?
+            // Wait, (synthRowCount - 1) is the LAST index of synth rows.
+            // If synthIndex=0, targetRow = MaxIndex.
+            // If getRowConfigs returns High->Low (Standard for grid rendering), then MaxIndex is Lowest Pitch.
+            // So keys F.. Right map to Low..High?
+            // Let's check: (synthRowCount - 1) - 0 = Last Row (Low).
+            // (synthRowCount - 1) - 1 = Penultimate (Higher).
+            // So F -> Low, G -> Higher... correct.
+
+            // EXTENSION LOGIC:
+            // For now, simpler logic: Only play if row exists.
+
+            let calculatedRow = (synthRowCount - 1) - synthIndex;
+            targetRow = calculatedRow;
           }
 
-          if (configs[targetRow]) {
+          if (targetRow >= 0 && configs[targetRow]) {
             setActiveRowsByKeyboard(prev => ({ ...prev, [targetRow]: true }));
             const config = configs[targetRow];
             const soundConfig = currentTrack.instrument;
@@ -345,7 +483,7 @@ const App: React.FC = () => {
       const capsOn = e.getModifierState('CapsLock');
       setIsPianoMode(capsOn);
 
-      const keyIndex = PIANO_KEYS.indexOf(e.code);
+      const keyIndex = EXTENDED_PIANO_KEYS.indexOf(e.code);
       if (keyIndex !== -1) {
         const configs = getRowConfigs(currentPart.scale, isUnrolled);
         const drumCount = 3;
@@ -358,6 +496,9 @@ const App: React.FC = () => {
         else {
           const synthIndex = keyIndex - 3;
           targetRow = (synthRowCount - 1) - synthIndex;
+          // Note: If we added calculating logic in handleKeyDown, strictly we should mirror it here
+          // to knowing which row to turn off. 
+          // Since we used simplifed logic (targetRow = calculatedRow), this matches.
         }
 
         if (targetRow !== -1) {
@@ -395,6 +536,7 @@ const App: React.FC = () => {
   const isFollowModeRef = useRef(true);
   const tracksRef = useRef<Track[]>(tracks);
   const bpmRef = useRef(bpm);
+  const fxGraphRef = useRef<FXGraph>(fxGraph);
   const [trackLoops, setTrackLoops] = useState<(number[] | null)[]>([]);
   const isUnrolledRef = useRef(isUnrolled);
   const isPerformanceModeRef = useRef(isPerformanceMode);
@@ -403,6 +545,7 @@ const App: React.FC = () => {
   const trackSyncStatusRef = useRef<boolean[]>([]);
   useEffect(() => { tracksRef.current = tracks; }, [tracks]);
   useEffect(() => { bpmRef.current = bpm; }, [bpm]);
+  useEffect(() => { fxGraphRef.current = fxGraph; }, [fxGraph]);
   useEffect(() => { isUnrolledRef.current = isUnrolled; }, [isUnrolled]);
   useEffect(() => { trackLoopsRef.current = trackLoops; }, [trackLoops]);
   useEffect(() => {
@@ -419,6 +562,7 @@ const App: React.FC = () => {
   const dragStartYRef = useRef(0);
   const dragStartHeightRef = useRef(0);
   const mousePosRef = useRef({ x: 0, y: 0 }); // Global mouse tracking for PIE menu start pos
+  const [selectedPatterns, setSelectedPatterns] = useState<{ tIdx: number, pIdx: number }[]>([]);
   const [isPieMenuOpen, setIsPieMenuOpen] = useState(false);
   const [pieMenuStartPos, setPieMenuStartPos] = useState({ x: 0, y: 0 }); // Where menu opened
 
@@ -1232,6 +1376,12 @@ const App: React.FC = () => {
         setIsPieMenuOpen(true);
       }
 
+      // Tab key for view toggle
+      if (e.key === 'Tab' && (e.target as HTMLElement).tagName !== 'INPUT' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        setViewMode(prev => prev === 'sequencer' ? 'node' : 'sequencer');
+      }
+
       const isInput = (e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA';
       if ((e.key === 'Delete' || e.key === 'Backspace') && !isInput) {
         if (selectedNotes.length > 0) {
@@ -1254,8 +1404,44 @@ const App: React.FC = () => {
           setToast({ message: `Deleted ${selectedNotes.length} notes`, visible: true });
         }
       }
+
+      // Home Row Play Logic
+      if (!isInput && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const KEYS = ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', "'"];
+        const keyIdx = KEYS.indexOf(e.key.toLowerCase());
+
+        if (keyIdx !== -1 && !e.repeat) {
+          const configs = getRowConfigs(currentPart.scale, isUnrolled);
+          const targetRow = configs.length - 1 - keyIdx;
+
+          if (targetRow >= 0 && targetRow < configs.length) {
+            setActiveRowsByKeyboard(prev => ({ ...prev, [targetRow]: true }));
+            startPreview(targetRow, { d: 1, o: 0, oct: 0 }, currentPart.scale);
+
+            const isArmed = e.getModifierState('CapsLock');
+            if (isArmed && isPlaying) {
+              const currentStep = playbackStepRef.current;
+              const newTracks = [...tracks];
+              const track = { ...newTracks[editingTrackIndex] };
+              // Ensure parts/grid deep copy
+              track.parts = [...track.parts];
+              const part = { ...track.parts[editingPatternIndex] };
+              const grid = part.grid.map(r => [...r]);
+
+              if (grid[targetRow]) {
+                grid[targetRow][currentStep] = { d: 1, o: 0, oct: 0 };
+                part.grid = grid;
+                track.parts[editingPatternIndex] = part;
+                newTracks[editingTrackIndex] = track;
+
+                setTracks(newTracks);
+                commitToHistory(newTracks);
+              }
+            }
+          }
+        }
+      }
     };
-    window.addEventListener('keydown', handleKeyDown);
 
     const handleMouseMove = (e: MouseEvent) => {
       mousePosRef.current = { x: e.clientX, y: e.clientY };
@@ -1268,38 +1454,68 @@ const App: React.FC = () => {
     };
     const handleMouseUp = () => setIsResizingArr(false);
 
+    const handleKeyUp = (e: KeyboardEvent) => {
+      const isInput = (e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA';
+      if (isInput) return;
+
+      const configs = getRowConfigs(currentPart.scale, isUnrolled);
+      const baseIndex = configs.length - 1;
+
+      // Simple mapping: A, S, D, F, G, H, J, K... -> Scale degrees up
+      const WHITE_KEYS = ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', "'"];
+      const keyIdx = WHITE_KEYS.indexOf(e.key.toLowerCase());
+
+      if (keyIdx !== -1) {
+        const targetRow = baseIndex - keyIdx;
+        if (targetRow >= 0 && targetRow < configs.length) {
+          setActiveRowsByKeyboard(prev => {
+            const next = { ...prev };
+            delete next[targetRow];
+            return next;
+          });
+          // Stop ONE, or all? stopPreview kills all for now.
+          stopPreview();
+        }
+      }
+    };
+
+    window.addEventListener('keyup', handleKeyUp);
+
+    window.addEventListener('keydown', handleKeyDown);
+
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [handleUndo, handleRedo, duplicatePattern, editingPatternIndex, isResizingArr, selectedNotes, editingTrackIndex, handleCopy, handlePaste, setIsPlaying, tracks, commitToHistory, setToast]);
+  }, [handleUndo, handleRedo, duplicatePattern, editingPatternIndex, isResizingArr, selectedNotes, editingTrackIndex, handleCopy, handlePaste, setIsPlaying, tracks, commitToHistory, setToast, viewMode, currentPart, isUnrolled, isPlaying, tracks, masterVolume]);
 
 
   return (
     <div className="h-screen bg-slate-950 text-slate-100 font-sans p-1 md:p-2 flex flex-col overflow-hidden">
       <header className="bg-slate-900/90 p-1.5 md:p-2 rounded-xl border border-white/5 backdrop-blur-xl shadow-2xl mb-2 md:mb-3 shrink-0 relative z-50">
         <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-3">
+          <div className="flex flex-col gap-1 w-full lg:w-auto">
+            <div className="flex items-center justify-between lg:justify-start gap-3 w-full">
               <h1 className="text-xl md:text-3xl font-black tracking-tighter text-white">
                 PULSE<span className="text-sky-500">PAD</span>
               </h1>
               <div className="flex items-center gap-1.5 text-[8px] md:text-[9px] font-bold uppercase tracking-widest text-slate-500 bg-black/40 px-2 py-1 rounded-full border border-slate-800">
                 <div className={`w-1.5 h-1.5 rounded-full transition-colors ${isPlaying ? 'bg-emerald-500 animate-pulse' : 'bg-slate-700'}`}></div>
-                <span className="hidden sm:inline">{isPlaying ? 'Playing' : 'Standby'}</span>
+                <span className="inline">{isPlaying ? 'Playing' : 'Standby'}</span>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 bg-black/40 p-2.5 rounded-2xl border border-slate-800 flex-wrap">
-            <div className="flex items-center px-2 border-r border-slate-700 mr-2 gap-2">
-              <span className="text-[9px] uppercase tracking-widest text-slate-500 font-bold">Scale</span>
+          <div className="flex items-center gap-3 bg-black/40 p-2.5 rounded-2xl border border-slate-800 flex-wrap justify-between w-full lg:w-auto">
+            <div className="flex items-center px-1 md:px-2 border-r border-slate-700 mr-2 gap-2">
+              <span className="hidden md:inline text-[9px] uppercase tracking-widest text-slate-500 font-bold">Scale</span>
               <select
-                className={`bg-slate-800/80 border border-white/10 rounded-lg px-2 py-1 text-[10px] font-black uppercase text-sky-400 outline-none hover:border-sky-500/50 transition-all cursor-pointer ${isUnrolled ? 'opacity-20 pointer-events-none grayscale' : ''}`}
+                className={`bg-slate-800/80 border border-white/10 rounded-lg px-2 py-1 text-[10px] font-black uppercase text-sky-400 outline-none hover:border-sky-500/50 transition-all cursor-pointer max-w-[80px] md:max-w-none ${isUnrolled ? 'opacity-20 pointer-events-none grayscale' : ''}`}
                 value={currentPart.scale}
                 disabled={isUnrolled}
                 onChange={(e) => {
@@ -1335,10 +1551,17 @@ const App: React.FC = () => {
             </button>
             <button
               onClick={() => setViewMode(viewMode === 'spreadsheet' ? 'sequencer' : 'spreadsheet')}
-              className={`px-2 py-1 rounded-xl transition-all text-xs border ${viewMode === 'spreadsheet' ? 'bg-emerald-500 border-emerald-400 text-white' : 'text-slate-500 border-slate-700 hover:text-white'}`}
+              className={`hidden md:block px-2 py-1 rounded-xl transition-all text-xs border ${viewMode === 'spreadsheet' ? 'bg-emerald-500 border-emerald-400 text-white' : 'text-slate-500 border-slate-700 hover:text-white'}`}
               title="Spreadsheet View"
             >
               📊
+            </button>
+            <button
+              onClick={() => setShowKeyboard(!showKeyboard)}
+              className={`px-3 py-1 rounded-xl transition-all text-xs border ${showKeyboard ? 'bg-sky-500 border-sky-400 text-white' : 'text-slate-500 border-slate-700 hover:text-white'}`}
+              title="Toggle Keyboard"
+            >
+              🎹
             </button>
           </div>
 
@@ -1472,7 +1695,7 @@ const App: React.FC = () => {
               </h3>
             </div>
             <div className="flex-1 min-h-0 bg-slate-900 overflow-hidden relative">
-              {viewMode === 'sequencer' && (
+              <div className={`absolute inset-0 view-transition ${viewMode === 'sequencer' ? 'view-visible' : 'view-hidden'}`}>
                 <CanvasSequencer
                   grid={currentPart.grid}
                   rowConfigs={getRowConfigs(currentPart.scale, isUnrolled)}
@@ -1486,7 +1709,18 @@ const App: React.FC = () => {
                   activeRowsByKeyboard={activeRowsByKeyboard}
                   onSelectNotes={setSelectedNotes}
                   selectedNotes={selectedNotes}
-                  playbackStep={(playbackPatternIndex % currentTrack.parts.length) === editingPatternIndex ? playbackStep : -1}
+                  playbackStep={(() => {
+                    const loop = trackLoops[editingTrackIndex];
+                    let effectiveIndex = playbackPatternIndex;
+                    if (loop) {
+                      const [start, end] = loop;
+                      const len = end - start + 1;
+                      effectiveIndex = start + (playbackPatternIndex % len);
+                    } else {
+                      effectiveIndex = playbackPatternIndex % currentTrack.parts.length;
+                    }
+                    return (effectiveIndex === editingPatternIndex) ? playbackStep : -1;
+                  })()}
                   playheadDistance={(() => {
                     const loop = trackLoops[editingTrackIndex];
                     let effectiveIndex = playbackPatternIndex;
@@ -1504,16 +1738,11 @@ const App: React.FC = () => {
                   isUnrolled={isUnrolled}
                   scrollTop={sequencerScrollTop}
                   onSetScrollTop={setSequencerScrollTop}
+                  paused={viewMode !== 'sequencer'}
                 />
-              )}
-              {viewMode === 'spreadsheet' && (
-                <SpreadsheetView
-                  grid={currentPart.grid}
-                  rowConfigs={getRowConfigs(currentPart.scale, isUnrolled)}
-                  onUpdateNote={handleUpdateNote}
-                />
-              )}
-              {viewMode === 'node' && (
+              </div>
+
+              <div className={`absolute inset-0 view-transition ${viewMode === 'node' ? 'view-visible' : 'view-hidden'}`}>
                 <NodalInterface
                   ref={nodalRef}
                   graph={fxGraph}
@@ -1521,9 +1750,38 @@ const App: React.FC = () => {
                   onCommitGraph={(newGraph) => commitToHistory(tracks, newGraph)}
                   trackCount={tracks.length}
                   trackNames={tracks.map(t => t.name)}
+                  paused={viewMode !== 'node'}
                 />
+              </div>
+
+              {viewMode === 'spreadsheet' && (
+                <div className="absolute inset-0">
+                  <SpreadsheetView
+                    grid={currentPart.grid}
+                    rowConfigs={getRowConfigs(currentPart.scale, isUnrolled)}
+                    onUpdateNote={handleUpdateNote}
+                  />
+                </div>
               )}
             </div>
+
+            <VirtualKeyboard
+              visible={showKeyboard}
+              rowConfigs={getRowConfigs(currentPart.scale, isUnrolled).map(r => ({ ...r, isRoot: r.label.includes(currentPart.scale.split(' ')[0].replace('#', '♯')) || false }))}
+              activeRows={activeRowsByKeyboard}
+              onNoteStart={(rowIdx) => {
+                setActiveRowsByKeyboard(prev => ({ ...prev, [rowIdx]: true }));
+                startPreview(rowIdx, { d: 1, o: 0, oct: 0 }, currentPart.scale);
+              }}
+              onNoteStop={(rowIdx) => {
+                setActiveRowsByKeyboard(prev => {
+                  const next = { ...prev };
+                  delete next[rowIdx];
+                  return next;
+                });
+                stopPreview();
+              }}
+            />
           </section>
 
           {isArrOpen && (
@@ -1588,6 +1846,8 @@ const App: React.FC = () => {
                     onOpenInstrument={setOpenDrawerTrackIndex}
                     onSaveClick={() => user ? setIsShareModalOpen(true) : setIsAuthModalOpen(true)}
                     isLoggedIn={!!user}
+                    selectedPatterns={selectedPatterns}
+                    onSelectPatterns={setSelectedPatterns}
                   />
                 </div>
                 <VolumeMeter />
@@ -1651,6 +1911,15 @@ const App: React.FC = () => {
         <div className="fixed bottom-12 left-1/2 -translate-x-1/2 bg-sky-500/20 border border-sky-400/30 text-sky-400 text-[10px] font-bold px-3 py-1 rounded-full animate-pulse z-[200]">
           PIANO MODE ON
         </div>
+      )}
+      {welcomeData && (
+        <WelcomeOverlay
+          songName={welcomeData.name}
+          authorName={welcomeData.authorName}
+          authorPhotoUrl={welcomeData.authorPhotoUrl}
+          linerNotes={welcomeData.linerNotes}
+          onDismiss={() => setWelcomeData(null)}
+        />
       )}
     </div>
   );

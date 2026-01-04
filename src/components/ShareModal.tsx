@@ -21,6 +21,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
     onSaveComplete
 }) => {
     const [songName, setSongName] = useState(songData.name || "My Pulse Song");
+    const [linerNotes, setLinerNotes] = useState("");
     const [loading, setLoading] = useState(false);
     const [savedId, setSavedId] = useState<string | null>(null);
     const [copySuccess, setCopySuccess] = useState(false);
@@ -36,7 +37,9 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                 data: JSON.stringify(songData),
                 createdAt: serverTimestamp(),
                 isPublic: true,
-                authorName: user.displayName || 'Anonymous'
+                authorName: user.displayName || 'Anonymous',
+                authorPhotoUrl: user.photoURL,
+                linerNotes: linerNotes
             };
 
             let docRef;
@@ -95,6 +98,16 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                                     onChange={(e) => setSongName(e.target.value)}
                                     className="w-full bg-slate-950 border border-slate-700 rounded-lg py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 transition-colors"
                                     placeholder="Enter song name..."
+                                />
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Liner Notes / Welcome Message</label>
+                                <textarea
+                                    value={linerNotes}
+                                    onChange={(e) => setLinerNotes(e.target.value)}
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 transition-colors h-24 resize-none"
+                                    placeholder="Tell the listener about this track..."
                                 />
                             </div>
 

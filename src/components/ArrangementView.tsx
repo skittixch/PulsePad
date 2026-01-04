@@ -30,6 +30,8 @@ interface ArrangementViewProps {
     onOpenInstrument: (trackIdx: number) => void;
     onSaveClick: () => void;
     isLoggedIn: boolean;
+    selectedPatterns: { tIdx: number, pIdx: number }[];
+    onSelectPatterns: (patterns: { tIdx: number, pIdx: number }[]) => void;
 }
 
 export const ArrangementView: React.FC<ArrangementViewProps> = ({
@@ -58,7 +60,9 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
     onSetPerformanceMode,
     onOpenInstrument,
     onSaveClick,
-    isLoggedIn
+    isLoggedIn,
+    selectedPatterns,
+    onSelectPatterns
 }) => {
     const [dropPlaceholder, setDropPlaceholder] = React.useState<{ tIdx: number, pIdx: number } | null>(null);
     const [draggingItem, setDraggingItem] = React.useState<{ tIdx: number, pIdx: number } | null>(null);
@@ -245,6 +249,7 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                         >
                             {track.parts.map((part, pIdx) => {
                                 const isEditing = tIdx === editingTrackIndex && pIdx === editingPatternIndex;
+                                const isSelected = isEditing || selectedPatterns.some(sp => sp.tIdx === tIdx && sp.pIdx === pIdx);
                                 const myLoop = trackLoops[tIdx];
                                 const isInLoop = myLoop && pIdx >= myLoop[0] && pIdx <= myLoop[1];
                                 const isLoopStart = myLoop && pIdx === myLoop[0];
@@ -287,11 +292,19 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                             onClick={(e) => {
                                                 onToggleFollow(false);
                                                 if (e.shiftKey) {
+                                                    // Range Selection (using editingPatternIndex as anchor)
                                                     const start = Math.min(editingPatternIndex, pIdx);
                                                     const end = Math.max(editingPatternIndex, pIdx);
-                                                    onTrackLoopChange(tIdx, [start, end]);
+
+                                                    const newSelection: { tIdx: number, pIdx: number }[] = [];
+                                                    for (let i = start; i <= end; i++) {
+                                                        newSelection.push({ tIdx, pIdx: i });
+                                                    }
+                                                    onSelectPatterns(newSelection);
                                                 } else {
+                                                    // Normal Selection
                                                     onSelectPattern(tIdx, pIdx);
+                                                    onSelectPatterns([{ tIdx, pIdx }]);
                                                 }
                                             }}
                                             onMouseDown={(e) => {
@@ -354,7 +367,7 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                                 part={part}
                                                 trackIndex={tIdx}
                                                 partIndex={pIdx}
-                                                isEditing={isEditing}
+                                                isEditing={isSelected}
                                                 isInLoop={!!isInLoop}
                                                 isLoopStart={!!isLoopStart}
                                                 isLoopEnd={!!isLoopEnd}

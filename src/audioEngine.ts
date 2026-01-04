@@ -378,25 +378,22 @@ export class AudioEngine {
     rebuildFXGraph(graph: FXGraph) {
         if (!this.ctx) return;
 
-        // Structural comparison: Only rebuild if IDs or Types change, or connections change.
+        // Structural comparison: Check if IDs, Types, Connections, or Bypass state changed.
         const struct = {
-            nodes: graph.nodes.map(n => ({ id: n.id, type: n.type })),
+            nodes: graph.nodes.map(n => ({ id: n.id, type: n.type, bypass: n.bypass })),
             connections: graph.connections
         };
         const structStr = JSON.stringify(struct);
-        // OPTIMIZATION: Check params too.
-        // If structure AND params match, do nothing (avoids artifacts on drag when only X/Y changes).
+
+        // Params check
         const paramsStr = JSON.stringify(graph.nodes.map(n => ({ id: n.id, params: n.params })));
 
         if (this.lastStructStr === structStr) {
-            // Structure matched. Did params change?
             if (this.lastParamsStr === paramsStr) {
-                // Nothing relevant changed.
                 this.currentFXGraph = graph;
                 return;
             }
-
-            // Params changed. Update them.
+            // Just params changed
             this.lastParamsStr = paramsStr;
             this.currentFXGraph = graph;
             graph.nodes.forEach(nData => {
@@ -408,262 +405,327 @@ export class AudioEngine {
             return;
         }
 
-        this.lastStructStr = structStr;
-        this.lastParamsStr = paramsStr;
-        this.currentFXGraph = graph;
-        if (!this.trackOutputs.length || !this.masterGain) return;
+        if (!this.trackOutputs.length || !this.masterGain) {
+            console.warn("AudioEngine: rebuildFXGraph skipped (not ready)");
+            return;
+        }
 
-        // 0. Disconnect EVERYTHING to start from a clean state (Strict Routing)
+        this.currentFXGraph = graph;
+
+        // 1. Identification Phase: Separate preserved vs new vs deleted
+        const newActiveNodes = new Map<string, any>();
+        const preservedIds = new Set<string>();
+
+        graph.nodes.forEach(nData => {
+            const existing = this.activeFXNodes.get(nData.id);
+            // Must match Type AND Bypass state to be reused
+            // (If bypass toggles, we need to rebuild the node structure (Gain vs FX))
+            const existingBypass = !!existing?.isBypass;
+            const newBypass = !!nData.bypass;
+
+            if (existing && existing.type === nData.type && existingBypass === newBypass) {
+                // REUSE EXISTING NODE
+                newActiveNodes.set(nData.id, existing);
+                preservedIds.add(nData.id);
+
+                // Update params for preserved nodes just in case
+                if (nData.params) {
+                    Object.entries(nData.params).forEach(([pId, val]) => {
+                        this.updateFXParam(nData.id, pId, val);
+                    });
+                }
+            } else {
+                // CREATE NEW NODE
+                let node;
+                if (nData.type === 'source') {
+                    node = { isSource: true, type: 'source' };
+                } else if (nData.type === 'output') {
+                    node = { input: this.masterGain, output: this.masterGain, type: 'output' };
+                } else {
+                    node = this.createFXNode(nData);
+                }
+                if (node) newActiveNodes.set(nData.id, node);
+            }
+        });
+
+        // 2. Cleanup Phase: Disconnect and Destroy REMOVED nodes
+        this.activeFXNodes.forEach((node, id) => {
+            if (!preservedIds.has(id)) {
+                if (node.disconnect) node.disconnect();
+                else if (node instanceof AudioNode) node.disconnect();
+            }
+        });
+
+        // 3. Disconnect Phase: Disconnect outputs of PRESERVED nodes to allow clean rewiring
+        // (Internal state like Delay buffers remains intact)
+        newActiveNodes.forEach((node) => {
+            // Don't disconnect 'output' node (Master Gain)
+            if (node.type === 'output') return;
+
+            // CRITICAL FIX: For preserved nodes, we MUST NOT call .disconnect() method of the wrapper,
+            // because that destroys internal wiring (e.g. input->dry->output).
+            // We only want to disconnect the node's OUTPUT from the rest of the graph.
+
+            if (node.output && node.output instanceof AudioNode) {
+                // It's a Custom Node Wrapper (Delay, Reverb, etc.)
+                // Just disconnect the final output stage.
+                try { node.output.disconnect(); } catch (e) { }
+            } else if (node instanceof AudioNode) {
+                // It's a native node (Filter, etc.)
+                try { node.disconnect(); } catch (e) { }
+            } else if (node.disconnect) {
+                // Fallback? If it has no .output but has .disconnect, it might be a special node.
+                // But in our createFXNode, all wrappers have .output or are AudioNodes.
+                // If we are here, and it's preserved, be careful.
+                // If we connect to it via 'input', that's fine.
+                // If it outputs via 'output', we disconnected it above.
+            }
+        });
+
+        // 4. Global Inputs Disconnect
         this.sequencerMainOut?.disconnect();
         this.trackOutputs.forEach(t => t.disconnect());
 
-        // 0b. Cleanup OLD nodes explicitly (before they are cleared)
-        this.activeFXNodes.forEach(node => {
-            if (node.disconnect) {
-                node.disconnect();
-            } else if (node instanceof AudioNode) {
-                node.disconnect();
-            }
-        });
-        this.activeFXNodes.clear();
 
-        // 1. Prepare new nodes
-        const newFXNodes = new Map<string, any>();
-        graph.nodes.forEach(nData => {
-            let node;
-            if (nData.type === 'source') {
-                node = { isSource: true }; // Placeholder, inputs managed by trackIdx
-            } else if (nData.type === 'output') {
-                node = { input: this.masterGain, output: this.masterGain };
-            } else {
-                node = this.createFXNode(nData);
-            }
-            if (node) newFXNodes.set(nData.id, node);
-        });
+        // 5. Wiring Phase: Connect everything according to new graph
+        this.activeFXNodes = newActiveNodes; // Update reference for lookups
+        let mainOutConnected = false;
 
-        // 2. Map internal connections (including source outputs)
-        graph.connections.forEach(conn => {
-            const dst = newFXNodes.get(conn.target);
-            if (!dst) return;
-            const dstNode = dst.input || dst;
+        try {
+            graph.connections.forEach(conn => {
+                const dst = this.activeFXNodes.get(conn.target);
+                if (!dst) return;
+                const dstNode = dst.input || dst;
 
-            if (dst.isBypass) {
-                // If bypassed, ONLY allow main audio input (undefined or 'in_0')
-                if (conn.targetPort && conn.targetPort !== 'in_0') return;
-            }
+                if (dst.isBypass) {
+                    // Bypass logic handled by internal structure of bypass node
+                }
 
-            if (conn.source === 'src') {
-                // trackOutputs logic
-                if (conn.sourcePort === 'main') {
-                    if (this.sequencerMainOut) {
-                        this.sequencerMainOut.connect(dstNode);
+                if (conn.source === 'src') {
+                    // trackOutputs logic
+                    if (!conn.sourcePort || conn.sourcePort === 'main' || conn.sourcePort === 'out_0') {
+                        if (this.sequencerMainOut) {
+                            try {
+                                this.sequencerMainOut.connect(dstNode);
+                                mainOutConnected = true;
+                            } catch (e) {
+                                console.warn("Failed to connect Seq Main to", conn.target, e);
+                            }
+                        }
+                        return;
+                    }
+
+                    let trackIdx = 0;
+                    if (conn.sourcePort && conn.sourcePort.startsWith('track_')) {
+                        trackIdx = parseInt(conn.sourcePort.split('_')[1]);
+                    }
+                    const outputNode = this.trackOutputs[trackIdx];
+                    if (outputNode) {
+                        try {
+                            outputNode.connect(dstNode);
+                        } catch (e) {
+                            console.warn("Failed to connect Track", trackIdx, "to", conn.target, e);
+                        }
                     }
                     return;
                 }
 
-                let trackIdx = 0;
-                if (conn.sourcePort && conn.sourcePort.startsWith('track_')) {
-                    trackIdx = parseInt(conn.sourcePort.split('_')[1]);
+                const src = this.activeFXNodes.get(conn.source);
+                if (src && !src.isSource) {
+                    const srcNode = src.output || src;
+                    try { srcNode.connect(dstNode); } catch (e) {
+                        console.warn("Failed to connect", conn.source, "to", conn.target, e);
+                    }
                 }
-                const outputNode = this.trackOutputs[trackIdx];
-                if (outputNode) {
-                    outputNode.connect(dstNode);
-                }
-                return;
-            }
+            });
+        } catch (e) {
+            console.error("Critical Wiring Error:", e);
+        }
 
-            const src = newFXNodes.get(conn.source);
-            if (src && !src.isSource) {
-                const srcNode = src.output || src;
-                try { srcNode.connect(dstNode); } catch (e) { }
-            }
-        });
+        // Fallback: If Main Mix isn't routed anywhere, send it to Master
+        if (!mainOutConnected && this.sequencerMainOut && this.masterGain) {
+            this.sequencerMainOut.connect(this.masterGain);
+        }
 
-        // 3. Prepare final stage (out connections handled by step 2 if 'out' is a node)
+        // 6. Final Routing: Unconnected tracks -> Main Out
         const connectedTracks = new Set<number>();
-
         graph.connections.forEach(c => {
             if (c.source === 'src') {
-                // Only count as "connected" if the target node actually exists in the graph
-                if (c.sourcePort?.startsWith('track_') && newFXNodes.has(c.target)) {
+                if (c.sourcePort?.startsWith('track_') && this.activeFXNodes.has(c.target)) {
                     connectedTracks.add(parseInt(c.sourcePort.split('_')[1]));
                 }
             }
         });
 
-        // In strict mode, if main is not connected to a node, it stays disconnected.
-        // We no longer automatically route to master if not in the graph.
-
         this.trackOutputs.forEach((output, idx) => {
             if (!connectedTracks.has(idx)) {
-                // Tracks not explicitly connected in the graph route to the MIX bus.
-                // Note: MIX bus only hits speakers if 'main' port is wired in graph.
                 if (this.sequencerMainOut) output.connect(this.sequencerMainOut);
             }
         });
 
-        this.activeFXNodes = newFXNodes;
+        // SUCCESS: Update cache state
+        this.lastStructStr = structStr;
+        this.lastParamsStr = paramsStr;
     }
 
     private createFXNode(nData: FXNode) {
-        if (!this.ctx) return null;
+        try {
+            if (!this.ctx) return null;
 
-        // PASSTHROUGH / BYPASS LOGIC
-        if (nData.bypass) {
-            // Return a simple unity gain node acting as a wire
-            const pass = this.ctx.createGain();
-            pass.gain.value = 1.0;
-            return {
-                input: pass,
-                output: pass,
-                type: 'bypass',
-                isBypass: true, // Marker for connection filtering
-                disconnect: () => pass.disconnect()
-            };
-        }
-
-        const p = nData.params || {};
-
-        switch (nData.type) {
-            case 'delay': {
-                const input = this.ctx.createGain();
-                const output = this.ctx.createGain();
-                const delay = this.ctx.createDelay(1.0);
-                const feedback = this.ctx.createGain();
-                const wet = this.ctx.createGain();
-                const dry = this.ctx.createGain();
-
-                const beatTime = 60 / this.bpm;
-                delay.delayTime.value = (p.time ?? 0.25) * beatTime;
-                feedback.gain.value = p.feedback ?? 0.4;
-                wet.gain.value = p.mix ?? 0.5;
-                dry.gain.value = 1.0 - (p.mix ?? 0.5);
-
-                input.connect(dry);
-                dry.connect(output);
-                input.connect(delay);
-                delay.connect(feedback);
-                feedback.connect(delay);
-                delay.connect(wet);
-                wet.connect(output);
-
-                const node = {
-                    input, output, delay, feedback, wet, dry, type: 'delay',
-                    disconnect: () => {
-                        input.disconnect();
-                        output.disconnect();
-                        delay.disconnect();
-                        feedback.disconnect();
-                        wet.disconnect();
-                        dry.disconnect();
-                    }
+            // PASSTHROUGH / BYPASS LOGIC
+            if (nData.bypass) {
+                const pass = this.ctx.createGain();
+                pass.gain.value = 1.0;
+                return {
+                    input: pass,
+                    output: pass,
+                    type: nData.type,
+                    isBypass: true,
+                    disconnect: () => pass.disconnect()
                 };
-                return node;
             }
-            case 'filter': {
-                const f = this.ctx.createBiquadFilter();
-                f.type = 'lowpass';
-                f.frequency.value = (p.freq ?? 0.5) * 5000 + 100;
-                f.Q.value = (p.q ?? 0.1) * 20;
-                return f;
+
+            const p = nData.params || {};
+
+            switch (nData.type) {
+                case 'delay': {
+                    const input = this.ctx.createGain();
+                    const output = this.ctx.createGain();
+                    const delay = this.ctx.createDelay(2.0);
+                    const feedback = this.ctx.createGain();
+                    const wet = this.ctx.createGain();
+                    const dry = this.ctx.createGain();
+
+                    const beatTime = 60 / this.bpm;
+                    delay.delayTime.value = (p.time ?? 0.25) * beatTime;
+                    feedback.gain.value = p.feedback ?? 0.4;
+                    wet.gain.value = p.mix ?? 0.5;
+                    dry.gain.value = 1.0 - (p.mix ?? 0.5);
+
+                    input.connect(dry);
+                    dry.connect(output);
+                    input.connect(delay);
+                    delay.connect(feedback);
+                    feedback.connect(delay);
+                    delay.connect(wet);
+                    wet.connect(output);
+
+                    return {
+                        input, output, delay, feedback, wet, dry, type: 'delay',
+                        disconnect: () => {
+                            input.disconnect(); output.disconnect(); delay.disconnect();
+                            feedback.disconnect(); wet.disconnect(); dry.disconnect();
+                        }
+                    };
+                }
+                case 'filter': {
+                    const f = this.ctx.createBiquadFilter();
+                    f.type = 'lowpass';
+                    f.frequency.value = (p.freq ?? 0.5) * 5000 + 100;
+                    f.Q.value = (p.q ?? 0.1) * 20;
+                    return f;
+                }
+                case 'distortion': {
+                    const dist = this.ctx.createWaveShaper();
+                    dist.curve = this.makeDistortionCurve((p.drive ?? 0.5) * 400);
+                    dist.oversample = '4x';
+                    return dist;
+                }
+                case 'reverb': {
+                    const convolver = this.ctx.createConvolver();
+                    convolver.buffer = this.createReverbBuffer(Math.max(0.1, (p.time ?? 0.5) * 4), Math.max(0.1, (p.decay ?? 0.5) * 10));
+                    const dry = this.ctx.createGain();
+                    const wet = this.ctx.createGain();
+                    const input = this.ctx.createGain();
+                    const output = this.ctx.createGain();
+
+                    wet.gain.value = p.mix ?? 0.5;
+                    dry.gain.value = 1 - (p.mix ?? 0.5);
+
+                    input.connect(convolver);
+                    convolver.connect(wet);
+                    wet.connect(output);
+                    input.connect(dry);
+                    dry.connect(output);
+
+                    return {
+                        input, output, convolver, dry, wet, type: 'reverb',
+                        disconnect: () => {
+                            input.disconnect(); output.disconnect(); convolver.disconnect();
+                            dry.disconnect(); wet.disconnect();
+                        }
+                    };
+                }
+                case 'compressor': {
+                    const comp = this.ctx.createDynamicsCompressor();
+                    comp.threshold.value = (p.threshold ?? 0.5) * -100;
+                    comp.ratio.value = (p.ratio ?? 0.5) * 20;
+                    comp.attack.value = (p.attack ?? 0.1);
+                    comp.release.value = (p.release ?? 0.2);
+                    return comp;
+                }
+                case 'mixer': {
+                    const input = this.ctx.createGain();
+                    const output = this.ctx.createGain();
+                    input.gain.value = 1.0;
+                    input.connect(output);
+                    return {
+                        input, output, type: 'mixer',
+                        disconnect: () => { input.disconnect(); output.disconnect(); }
+                    };
+                }
+                case 'parametricEQ': {
+                    const input = this.ctx.createGain();
+                    input.gain.value = 1.0;
+                    const output = this.ctx.createGain();
+                    output.gain.value = 1.0;
+
+                    const low = this.ctx.createBiquadFilter();
+                    const mid = this.ctx.createBiquadFilter();
+                    const high = this.ctx.createBiquadFilter();
+
+                    low.type = 'lowshelf';
+                    mid.type = 'peaking';
+                    high.type = 'highshelf';
+
+                    low.frequency.value = (p.lowFreq ?? 0.2) * 500;
+                    low.gain.value = (p.lowGain ?? 0.5) * 40 - 20;
+
+                    mid.frequency.value = (p.midFreq ?? 0.5) * 4000 + 500;
+                    mid.gain.value = (p.midGain ?? 0.5) * 40 - 20;
+                    mid.Q.value = (p.midQ ?? 0.1) * 10;
+
+                    high.frequency.value = (p.highFreq ?? 0.8) * 10000 + 4000;
+                    high.gain.value = (p.highGain ?? 0.5) * 40 - 20;
+
+                    input.connect(low);
+                    low.connect(mid);
+                    mid.connect(high);
+                    high.connect(output);
+
+                    return {
+                        input, output, low, mid, high, type: 'parametricEQ',
+                        disconnect: () => {
+                            input.disconnect(); output.disconnect();
+                            low.disconnect(); mid.disconnect(); high.disconnect();
+                        }
+                    };
+                }
+                default:
+                    return this.ctx.createGain();
             }
-            case 'distortion': {
-                const dist = this.ctx.createWaveShaper();
-                dist.curve = this.makeDistortionCurve((p.drive ?? 0.5) * 400);
-                dist.oversample = '4x';
-                return dist;
-            }
-            case 'reverb': {
-                const convolver = this.ctx.createConvolver();
-                convolver.buffer = this.createReverbBuffer((p.time ?? 0.5) * 4, (p.decay ?? 0.5) * 10);
-                const dry = this.ctx.createGain();
-                const wet = this.ctx.createGain();
-                const input = this.ctx.createGain();
-                const output = this.ctx.createGain();
-
-                wet.gain.value = p.mix ?? 0.5;
-                dry.gain.value = 1 - (p.mix ?? 0.5);
-
-                input.connect(convolver);
-                convolver.connect(wet);
-                wet.connect(output);
-                input.connect(dry);
-                dry.connect(output);
-
-                const node = {
-                    input, output, convolver, dry, wet, type: 'reverb',
-                    disconnect: () => {
-                        input.disconnect();
-                        output.disconnect();
-                        convolver.disconnect();
-                        dry.disconnect();
-                        wet.disconnect();
-                    }
+        } catch (e) {
+            console.error("Error creating FX node:", nData.type, e);
+            // Fallback to passthrough
+            if (this.ctx) {
+                const pass = this.ctx.createGain();
+                pass.gain.value = 1.0;
+                return {
+                    input: pass, output: pass, type: nData.type || 'error',
+                    disconnect: () => pass.disconnect()
                 };
-                return node;
             }
-            case 'compressor': {
-                const comp = this.ctx.createDynamicsCompressor();
-                comp.threshold.value = (p.threshold ?? 0.5) * -100;
-                comp.ratio.value = (p.ratio ?? 0.5) * 20;
-                comp.attack.value = (p.attack ?? 0.1);
-                comp.release.value = (p.release ?? 0.2);
-                return comp;
-            }
-            case 'mixer': {
-                const input = this.ctx.createGain();
-                const output = this.ctx.createGain();
-                input.gain.value = 1.0;
-                input.connect(output);
-                const node = {
-                    input, output, type: 'mixer',
-                    disconnect: () => {
-                        input.disconnect();
-                        output.disconnect();
-                    }
-                };
-                return node;
-            }
-            case 'parametricEQ': {
-                const input = this.ctx.createGain();
-                const output = this.ctx.createGain();
-                const low = this.ctx.createBiquadFilter();
-                const mid = this.ctx.createBiquadFilter();
-                const high = this.ctx.createBiquadFilter();
-
-                low.type = 'lowshelf';
-                mid.type = 'peaking';
-                high.type = 'highshelf';
-
-                low.frequency.value = (p.lowFreq ?? 0.2) * 500;
-                low.gain.value = (p.lowGain ?? 0.5) * 40 - 20;
-
-                mid.frequency.value = (p.midFreq ?? 0.5) * 4000 + 500;
-                mid.gain.value = (p.midGain ?? 0.5) * 40 - 20;
-                mid.Q.value = (p.midQ ?? 0.1) * 10;
-
-                high.frequency.value = (p.highFreq ?? 0.8) * 10000 + 4000;
-                high.gain.value = (p.highGain ?? 0.5) * 40 - 20;
-
-                input.connect(low);
-                low.connect(mid);
-                mid.connect(high);
-                high.connect(output);
-
-                const node = {
-                    input, output, low, mid, high, type: 'parametricEQ',
-                    disconnect: () => {
-                        input.disconnect();
-                        output.disconnect();
-                        low.disconnect();
-                        mid.disconnect();
-                        high.disconnect();
-                    }
-                };
-                return node;
-            }
-            default:
-                return this.ctx.createGain();
+            return null;
         }
     }
 

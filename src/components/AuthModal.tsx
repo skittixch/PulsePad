@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { signInWithPopup } from 'firebase/auth';
 import type { User } from 'firebase/auth';
-import { auth, googleProvider, appleProvider } from '../firebase';
+import { auth, googleProvider } from '../firebase';
 
 interface AuthModalProps {
     isOpen: boolean;
@@ -82,14 +82,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, user }) =
                                     Sign in with Google
                                 </button>
 
-                                <button
-                                    onClick={() => handleLogin(appleProvider)}
-                                    disabled={loading}
-                                    className="w-full py-3 px-4 bg-black text-white hover:bg-slate-900 rounded-lg font-bold flex items-center justify-center gap-3 transition-all hover:scale-[1.02] active:scale-[0.98] border border-slate-700 disabled:opacity-50 disabled:pointer-events-none"
-                                >
-                                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="white"><path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.48-3.24.38-1.44 1.05-2.22.95-3.08.1C6.9 20.4 5.3 17.65 5.56 14.1c.15-2.35 1.4-3.5 3-3.5 1.04 0 1.95.53 2.53.53.58 0 1.65-.53 2.84-.53 1.99-.02 3 1.15 3.31 1.5-3.02 1.6-2.52 5.51.5 6.7-.49 1.15-1.12 2.27-1.69 2.48zM13 3.5c-1.6 0-3 .75-3 2.44 0 .9.36 1.86.85 2.55.48.65 1.18 1.02 2.2 1.02 1.52.05 3.08-.85 3.08-2.5 0-1.85-1.55-3.52-3.13-3.52z" /></svg>
-                                    Sign in with Apple
-                                </button>
                             </div>
 
                             {error && (
