@@ -873,25 +873,68 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
     const layoutNodes = useCallback(() => {
         if (graph.nodes.length === 0) return;
 
-        // Simple linear layout: Start with 'src', then other nodes, end with 'out'
-        const sorted = [...graph.nodes];
-        sorted.sort((a, b) => {
-            if (a.id === 'src') return -1;
-            if (b.id === 'src') return 1;
-            if (a.id === 'out') return 1;
-            if (b.id === 'out') return -1;
-            return 0;
+        // More sophisticated layout: Connection-aware layering
+        const depths: Record<string, number> = {};
+
+        // 1. Initial depths
+        graph.nodes.forEach(n => {
+            if (n.type === 'source' || n.id === 'src') depths[n.id] = 0;
+            else depths[n.id] = -1;
         });
 
-        const padding = 100;
-        const newNodes = sorted.map((n, i) => ({
-            ...n,
-            x: i * (NODE_WIDTH + padding),
-            y: 0
-        }));
+        // 2. Propagate depths through connections (topological ordering)
+        let changed = true;
+        let iterations = 0;
+        const maxIterations = graph.nodes.length;
+
+        while (changed && iterations < maxIterations) {
+            changed = false;
+            iterations++;
+            graph.connections.forEach(conn => {
+                if (depths[conn.source] !== -1) {
+                    const newDepth = depths[conn.source] + 1;
+                    if (newDepth > depths[conn.target]) {
+                        depths[conn.target] = newDepth;
+                        changed = true;
+                    }
+                }
+            });
+        }
+
+        // 3. Handle 'Speakers' (out) node - always should be last
+        const outNode = graph.nodes.find(n => n.type === 'output' || n.id === 'out');
+        const maxCurrentDepth = Math.max(...Object.values(depths));
+        if (outNode) depths[outNode.id] = maxCurrentDepth + 1;
+
+        // 4. Assign columns to potentially disconnected nodes
+        graph.nodes.forEach(n => {
+            if (depths[n.id] === -1) depths[n.id] = 1; // Default to column 1 if not reachable from src
+        });
+
+        // 5. Group by depth and assign positions
+        const layers: Record<number, string[]> = {};
+        graph.nodes.forEach(n => {
+            const d = depths[n.id];
+            if (!layers[d]) layers[d] = [];
+            layers[d].push(n.id);
+        });
+
+        const COL_SPACING = 350;
+        const ROW_SPACING = 350;
+
+        const newNodes = graph.nodes.map(n => {
+            const depth = depths[n.id];
+            const nodesInLayer = layers[depth];
+            const indexInLayer = nodesInLayer.indexOf(n.id);
+
+            return {
+                ...n,
+                x: depth * COL_SPACING,
+                y: (indexInLayer - (nodesInLayer.length - 1) / 2) * ROW_SPACING
+            };
+        });
 
         onCommitGraph({ ...graph, nodes: newNodes });
-        // Frame will happen manually after state update
         setTimeout(frameGraph, 50);
     }, [graph, onCommitGraph, frameGraph]);
 

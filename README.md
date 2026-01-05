@@ -1,73 +1,89 @@
-# React + TypeScript + Vite
+# 🎚️ PulsePad: Pattern-Based Music Evolution
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+![PulsePad Banner](public/screenshots/arrangement.png)
 
-Currently, two official plugins are available:
+> **"vibe coded with 💖" by Eric Bacus**
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+PulsePad is a laboratory for rhythmic and melodic exploration. Built entirely within the browser using React and WebAudio, this project serves as a deep-dive exploration into **agentic coding capabilities** using **Google Antigravity**. 
 
-## React Compiler
+It transitions beyond a simple step sequencer into a high-speed, tactile environment for music creation, focusing on professional UI direction and robust, real-time execution.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+---
 
-## Expanding the ESLint configuration
+## 🚀 The Vision
+This project isn't just about making music; it's about pushing the boundaries of how AI agents can collaborate on complex, highly-interactive software. Every feature—from the **Topological FX Auto-Layout** to the **Premiere-style Vertical Zoom**—was developed through a recursive cycle of user feedback and agentic problem-solving.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+### Core Explorations:
+- **UI Interaction Density**: High-productivity hotkeys and gestural interactions (like magnetic node insertion).
+- **Audio Topology**: Real-time modular routing with visual signal chain feedback.
+- **Dynamic Inheritance**: Patterns that automatically inherit scales and rhythmic context from their neighbors.
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+---
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+## 🎨 Professional Interface
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+### 🎹 Advanced Piano Roll
+The Piano Roll features a robust framing engine that ensures your focus starts on **C4** (or your existing notes). It integrates professional-grade navigation, including vertical "pinch" zooming and smooth scrolling.
+
+![Piano Roll](public/screenshots/piano_roll.png)
+
+### 🕸️ Modular FX Graph
+A fully interactive nodal workspace. Route your audio through filters, delays, and distortions. Use modulation sources like LFOs to drive any parameter in the chain.
+
+![FX Graph](public/screenshots/fx_graph.png)
+
+---
+
+## ⚡ Productivity & Interaction (Hotkeys)
+
+PulsePad is designed to be played like an instrument. Master these shortcuts to stay in the flow.
+
+### 🏗️ Global System
+- **`Space`**: Toggle Play/Stop.
+- **`Ctrl + Z / Y`**: Full undo/redo stack for arrangement, notes, and wiring.
+- **`Ctrl + D`**: Duplicate the currently editing pattern.
+- **Double-Click BPM**: Reset to **120 BPM**.
+
+### 🎹 Sequencer & Piano Roll
+- **`V` / `C`**: Toggle between **Pointer** and **Razor** tools.
+- **`Mouse Wheel`**: Vertical scroll (Shift focus).
+- **`Alt + Drag`**: Clone a note instantly.
+- **`Scroll while Dragging`**: Shift a note's octave on the fly.
+- **`Vertical Gutter Drag`**: Strum through note labels to preview sounds.
+
+### 🕸️ FX Graph (Nodal)
+- **`L`**: Trigger **Topological Auto-Layout**. Organizes nodes into clear, non-overlapping columns based on connections.
+- **`F`**: Frame all nodes in view.
+- **`Y` (Hold)**: **Laser Cutter** tool. Slice through wires to disconnect them.
+- **`Shift + Drag`**:
+    - **Inject**: Drop a node onto a wire to insert it into the chain.
+    - **Extract**: Pull a node out of a chain; neighbors bridge automatically.
+
+---
+
+## 🛠️ Technology Stack
+- **Framework**: React 19 + TypeScript
+- **Bundler**: Vite + HMR
+- **Styling**: Tailwind CSS (Sophisticated Dark Mode / Glassmorphism)
+- **Audio**: Custom WebAudio Engine (audioEngine.ts)
+- **Deployment**: Firebase Hosting & Firestore
+
+---
+
+## 🧪 Development Workflow
+PulsePad uses a modern React development flow:
+
+```bash
+# Clone the repository
+git clone https://github.com/skittixch/PulseStudio
+
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+---
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+*Explore the latest live build at [pulsepad.web.app](https://pulsepad.web.app).*

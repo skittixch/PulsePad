@@ -31,7 +31,9 @@ export const OnboardingModal: React.FC<{ onClose: () => void }> = ({ onClose }) 
                 <div className="prose prose-invert max-w-2xl mb-8 text-slate-300">
                     <p>
                         You are one of the first to try this tool. Expect bugs, rapid changes, and potential data resets.
-                        We are building a new way to visualize and create music in the browser.
+                    </p>
+                    <p className="text-xl font-medium tracking-tight mt-4 italic opacity-80">
+                        "vibe coded with 💖" by Eric Bacus
                     </p>
                 </div>
 

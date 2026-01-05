@@ -116,6 +116,9 @@ const App: React.FC = () => {
   const [playbackPatternIndex, setPlaybackPatternIndex] = useState(0);
   const [sequencerScrollTop, setSequencerScrollTop] = useState(0);
   const [sequencerRowHeight, setSequencerRowHeight] = useState(40);
+  const [seqHeight, setSeqHeight] = useState(0); // Start at 0 to trigger re-frame effect
+  const seqContainerRef = useRef<HTMLDivElement>(null);
+  const [hasReframed, setHasReframed] = useState(false);
   const [queuedPatternIndex, setQueuedPatternIndex] = useState<number>(-1);
   const [isFollowMode, setIsFollowMode] = useState(true);
   const [isBuildMode, setIsBuildMode] = useState(() => {
@@ -358,6 +361,64 @@ const App: React.FC = () => {
     }
     return () => unsubscribe();
   }, [showToast]);
+
+  useEffect(() => {
+    if (!seqContainerRef.current) return;
+    const obs = new ResizeObserver((entries) => {
+      for (let entry of entries) {
+        setSeqHeight(entry.contentRect.height);
+      }
+    });
+    obs.observe(seqContainerRef.current);
+    return () => obs.disconnect();
+  }, []);
+
+  // One-time re-frame when entering Piano Roll and height is actually measured
+  useEffect(() => {
+    if (isUnrolled && seqHeight > 100 && !hasReframed) {
+      const targetPart = tracksRef.current[editingTrackIndex].parts[editingPatternIndex];
+      const configs = getRowConfigs(targetPart.scale, true);
+
+      // Calculate framing with REAL height
+      let minR = Infinity;
+      let maxR = -Infinity;
+      let hasNotes = false;
+      targetPart.grid.forEach((row, r) => {
+        if (configs[r]?.type === 'synth' && row.some(n => n !== null)) {
+          if (r < minR) minR = r;
+          if (r > maxR) maxR = r;
+          hasNotes = true;
+        }
+      });
+
+      // Same height logic as in the click handler but using real seqHeight
+      const visiblePx = seqHeight;
+      let targetRowH = 40;
+      if (hasNotes) {
+        const range = maxR - minR + 1;
+        const paddedRange = Math.max(36, range + 12);
+        targetRowH = Math.max(12, Math.min(48, visiblePx / paddedRange));
+      } else {
+        const targetRows = 42;
+        targetRowH = Math.max(12, Math.min(48, visiblePx / targetRows));
+      }
+
+      setSequencerRowHeight(targetRowH);
+
+      // Calculate Scroll
+      if (hasNotes) {
+        const centerR = (minR + maxR) / 2;
+        setSequencerScrollTop(Math.max(0, (centerR * targetRowH) - (visiblePx / 2)));
+      } else {
+        const c4Index = configs.findIndex(c => c.label.includes('C4'));
+        const targetIndex = c4Index > -1 ? c4Index : Math.floor(configs.length / 2);
+        setSequencerScrollTop(Math.max(0, (targetIndex * targetRowH) - (visiblePx / 2)));
+      }
+
+      setHasReframed(true);
+    }
+    if (!isUnrolled && hasReframed) setHasReframed(false);
+  }, [isUnrolled, seqHeight, hasReframed, editingTrackIndex, editingPatternIndex]);
 
   const currentTrack = tracks[editingTrackIndex] || tracks[0];
   const currentPart = currentTrack.parts[editingPatternIndex] || currentTrack.parts[0];
@@ -1234,12 +1295,20 @@ const App: React.FC = () => {
       }
     });
 
+    const targetRowH = sequencerRowHeight;
+    const visibleH = seqHeight || 600;
+
     if (hasNotes) {
       const centerR = (minR + maxR) / 2;
-      const targetScroll = Math.max(0, (centerR * 40) - (arrHeight / 2) - 100);
+      const targetScroll = Math.max(0, (centerR * targetRowH) - (visibleH / 2));
+      setSequencerScrollTop(targetScroll);
+    } else {
+      const c4Index = configs.findIndex(c => c.label.includes('C4'));
+      const targetIndex = c4Index > -1 ? c4Index : Math.floor(configs.length / 2);
+      const targetScroll = Math.max(0, (targetIndex * targetRowH) - (visibleH / 2));
       setSequencerScrollTop(targetScroll);
     }
-  }, [arrHeight]);
+  }, [seqHeight, sequencerRowHeight]);
 
   const changePatternScale = useCallback((trackIdx: number, partIdx: number, newScale: string) => {
     const currentTracks = tracksRef.current;
@@ -1281,27 +1350,15 @@ const App: React.FC = () => {
     }));
     setTracks(nextTracks);
 
-    // Scroll Logic: Center for Piano, Reset for Key View
-    // Scroll Logic: Center for Piano, Reset for Key View
     if (targetUnrolled) {
-      // Default to Octave 4 Center
-      // Notes are roughly C0 to B8
-      // C4 is around index 57 (depending on scale).
-      // Chromatic C4 = 48 + 9? No.
-      // Scale length varies. 
-      // Safe bet: Center of the grid? Or calculate C4 offset.
-
-      const configs = getRowConfigs(nextTracks[editingTrackIndex].parts[editingPatternIndex].scale, true);
-      const c4Index = configs.findIndex(c => c.label.includes('C4'));
-      const targetIndex = c4Index > -1 ? c4Index : Math.floor(configs.length / 2);
-
-      const centerScroll = Math.max(0, (targetIndex * 40) - (arrHeight / 2));
-      setSequencerScrollTop(centerScroll);
-      // NOTE: We do NOT call fitSequencerToNotes here anymore to avoid jumping to top note.
+      // Use centralized framing logic
+      const targetPart = nextTracks[editingTrackIndex].parts[editingPatternIndex];
+      const configs = getRowConfigs(targetPart.scale, true);
+      fitSequencerToNotes(targetPart.grid, configs);
     } else {
       setSequencerScrollTop(0);
     }
-  }, [editingTrackIndex, editingPatternIndex, arrHeight]);
+  }, [editingTrackIndex, editingPatternIndex, fitSequencerToNotes]);
 
   const handleReset = useCallback(() => {
     if (!resetArmed) {
@@ -2027,12 +2084,13 @@ const App: React.FC = () => {
                 }
 
                 if (target) {
-                  // Piano View Entry Framing
-                  const visiblePx = arrHeight - 80;
-                  const configs = getRowConfigs(nextTracks[editingTrackIndex].parts[editingPatternIndex].scale, true);
+                  // Piano View Entry Framing 
+                  // Calculate dynamic row height to fit at least 3 octaves
+                  const visiblePx = seqHeight || 600;
+                  const currentPart = nextTracks[editingTrackIndex].parts[editingPatternIndex];
 
                   // Scan for note range
-                  const currentGrid = nextTracks[editingTrackIndex].parts[editingPatternIndex].grid;
+                  const currentGrid = currentPart.grid;
                   let minR = Infinity;
                   let maxR = -Infinity;
                   currentGrid.forEach((row, r) => {
@@ -2043,27 +2101,16 @@ const App: React.FC = () => {
                   });
 
                   let targetRowH = 40;
-                  let targetScroll = 0;
-
                   if (minR !== Infinity) {
-                    // Frame the notes with some padding (approx 1 octave = 12 notes)
                     const range = maxR - minR + 1;
-                    const paddedRange = Math.max(36, range + 12); // Minimum 3 octaves
+                    const paddedRange = Math.max(36, range + 12);
                     targetRowH = Math.max(12, Math.min(48, visiblePx / paddedRange));
-
-                    const centerR = (minR + maxR) / 2;
-                    targetScroll = Math.max(0, (centerR * targetRowH) - (visiblePx / 2));
                   } else {
-                    // Default to Oct 3-5 cluster (center C4)
                     const targetRows = 42;
                     targetRowH = Math.max(12, Math.min(48, visiblePx / targetRows));
-                    const c4Index = configs.findIndex(c => c.label === 'C4');
-                    const centerIndex = c4Index > -1 ? c4Index : Math.floor(configs.length / 2);
-                    targetScroll = Math.max(0, (centerIndex * targetRowH) - (visiblePx / 2));
                   }
-
                   setSequencerRowHeight(targetRowH);
-                  setSequencerScrollTop(targetScroll);
+                  // Scroll will be handled by remapSongLayout call below which calls fitSequencerToNotes
                 }
 
                 remapSongLayout(target, isUnrolled, nextTracks);
@@ -2138,20 +2185,27 @@ const App: React.FC = () => {
               </h3>
             </div>
             <div
+              ref={seqContainerRef}
               className="flex-1 min-h-0 bg-slate-900 overflow-hidden relative"
-              onWheel={(e) => {
-                if (!isUnrolled) return;
-                setSequencerScrollTop(prev => {
-                  const configs = getRowConfigs(currentPart.scale, true);
-                  const maxScroll = Math.max(0, (configs.length * sequencerRowHeight) - (arrHeight - 80));
-                  return Math.max(0, Math.min(maxScroll, prev + e.deltaY));
-                });
-              }}
             >
-              <div className={`absolute inset-0 view-transition ${viewMode === 'sequencer' ? 'view-visible' : 'view-hidden'}`}>
+              <div
+                className={`absolute inset-0 view-transition ${viewMode === 'sequencer' ? 'view-visible' : 'view-hidden'}`}
+                onWheel={(e) => {
+                  if (!isUnrolled) return;
+                  setSequencerScrollTop(prev => {
+                    const configs = getRowConfigs(currentPart.scale, true);
+                    const maxScroll = Math.max(0, (configs.length * sequencerRowHeight) - seqHeight);
+                    return Math.max(0, Math.min(maxScroll, prev + e.deltaY));
+                  });
+                }}
+              >
                 <CanvasSequencer
                   grid={currentPart.grid}
                   rowConfigs={getRowConfigs(currentPart.scale, isUnrolled)}
+                  isUnrolled={isUnrolled}
+                  scrollTop={sequencerScrollTop}
+                  onSetScrollTop={setSequencerScrollTop}
+                  rowHeight={sequencerRowHeight}
                   onToggleNote={toggleNote}
                   onAddNote={addNote}
                   onCommitNote={handleCommitNote}
@@ -2208,22 +2262,18 @@ const App: React.FC = () => {
                   })()}
                   isPlaying={isPlaying}
                   snap={snap}
-                  isUnrolled={isUnrolled}
-                  scrollTop={sequencerScrollTop}
-                  onSetScrollTop={setSequencerScrollTop}
                   paused={viewMode !== 'sequencer'}
                   isResizing={isResizingArr}
-                  rowHeight={sequencerRowHeight}
                 />
                 {isUnrolled && (
                   <VerticalZoomScrollbar
                     totalItems={getRowConfigs(currentPart.scale, true).length}
                     rowHeight={sequencerRowHeight}
-                    visibleHeight={arrHeight - 80} // Approx header offset, or use ref
+                    visibleHeight={seqHeight}
                     scrollTop={sequencerScrollTop}
                     onScroll={setSequencerScrollTop}
                     onZoom={setSequencerRowHeight}
-                    minRowHeight={10}
+                    minRowHeight={12}
                     maxRowHeight={120}
                   />
                 )}
@@ -2385,21 +2435,25 @@ const App: React.FC = () => {
       </div>
 
       {/* Ad Banner - Only show if NOT loading and user is NOT logged in (OR if in debug mode for Eric) */}
-      {(!isAuthLoading && (!user || (user.email === 'eric@ericbacus.com' && debugAdMode))) && (
-        <AdBanner variant="real" adClient="ca-pub-9914207545194220" adSlot="" />
-      )}
+      {
+        (!isAuthLoading && (!user || (user.email === 'eric@ericbacus.com' && debugAdMode))) && (
+          <AdBanner variant="real" adClient="ca-pub-9914207545194220" adSlot="" />
+        )
+      }
 
       {/* Dev Ad Toggle (Bottom Right) */}
-      {user?.email === 'eric@ericbacus.com' && (
-        <div className="fixed bottom-1 right-1 opacity-10 hover:opacity-100 z-[100] pointer-events-auto transition-opacity">
-          <button
-            onClick={() => setDebugAdMode(!debugAdMode)}
-            className="text-[10px] uppercase font-bold text-white bg-slate-900/90 border border-slate-700 px-2 py-1 rounded hover:bg-slate-800"
-          >
-            {debugAdMode ? 'Debug: Hide Ads' : 'Debug: Test Ads'}
-          </button>
-        </div>
-      )}
+      {
+        user?.email === 'eric@ericbacus.com' && (
+          <div className="fixed bottom-1 right-1 opacity-10 hover:opacity-100 z-[100] pointer-events-auto transition-opacity">
+            <button
+              onClick={() => setDebugAdMode(!debugAdMode)}
+              className="text-[10px] uppercase font-bold text-white bg-slate-900/90 border border-slate-700 px-2 py-1 rounded hover:bg-slate-800"
+            >
+              {debugAdMode ? 'Debug: Hide Ads' : 'Debug: Test Ads'}
+            </button>
+          </div>
+        )
+      }
 
       {
         toast.visible && (
@@ -2420,12 +2474,14 @@ const App: React.FC = () => {
         onClose={() => setIsPieMenuOpen(false)}
       />
       {/* Modals & Overlays */}
-      {showOnboarding && (
-        <OnboardingModal onClose={() => {
-          setShowOnboarding(false);
-          localStorage.setItem('pulse_seen_onboarding', 'true');
-        }} />
-      )}
+      {
+        showOnboarding && (
+          <OnboardingModal onClose={() => {
+            setShowOnboarding(false);
+            localStorage.setItem('pulse_seen_onboarding', 'true');
+          }} />
+        )
+      }
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}

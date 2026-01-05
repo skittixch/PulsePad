@@ -45,13 +45,14 @@ export const VerticalZoomScrollbar: React.FC<VerticalZoomScrollbarProps> = ({
         };
     }, [rowHeight, scrollTop, totalItems, visibleHeight]);
 
-    const totalHeight = totalItems * rowHeight;
-    const thumbHeight = Math.max(24, (visibleHeight / totalHeight) * visibleHeight || 0);
+    const totalHeight = Math.max(1, totalItems * rowHeight);
+    const visibleH = Math.max(1, visibleHeight);
+    const thumbHeight = Math.max(24, (visibleH / totalHeight) * visibleH || 0);
 
-    const maxScroll = Math.max(0, totalHeight - visibleHeight);
+    const maxScroll = Math.max(0, totalHeight - visibleH);
     const scrollRatio = maxScroll > 0 ? scrollTop / maxScroll : 0;
-    const trackRange = visibleHeight - thumbHeight;
-    const thumbTop = scrollRatio * trackRange;
+    const trackRange = Math.max(1, visibleH - thumbHeight);
+    const thumbTop = Math.max(0, Math.min(trackRange, scrollRatio * trackRange));
 
     const handleMouseDown = (e: React.MouseEvent, type: 'thumb' | 'top' | 'bottom') => {
         e.preventDefault();
@@ -68,10 +69,11 @@ export const VerticalZoomScrollbar: React.FC<VerticalZoomScrollbarProps> = ({
             const { dragStartY, startScrollTop, rowHeight: curRowH, totalItems: curTotal, visibleHeight: curVisH } = stateRef.current;
             const deltaY = e.clientY - dragStartY;
 
-            const curTotalH = curTotal * curRowH;
-            const curMaxScroll = Math.max(0, curTotalH - curVisH);
-            const curThumbH = Math.max(24, (curVisH / curTotalH) * curVisH || 0);
-            const curTrackRange = curVisH - curThumbH;
+            const safeVisH = Math.max(1, curVisH);
+            const curTotalH = Math.max(1, curTotal * curRowH);
+            const curMaxScroll = Math.max(0, curTotalH - safeVisH);
+            const curThumbH = Math.max(24, (safeVisH / curTotalH) * safeVisH || 0);
+            const curTrackRange = Math.max(1, safeVisH - curThumbH);
 
             if (isDragging === 'thumb') {
                 const deltaRatio = deltaY / curTrackRange;
@@ -86,14 +88,14 @@ export const VerticalZoomScrollbar: React.FC<VerticalZoomScrollbarProps> = ({
                 const currentThumbBottom = thumbTop + curThumbH;
                 const newThumbHeight = Math.max(24, currentThumbBottom - newThumbTop);
 
-                const newTotalHeight = (curVisH * curVisH) / newThumbHeight;
+                const newTotalHeight = (safeVisH * safeVisH) / newThumbHeight;
                 const newRowHeight = newTotalHeight / curTotal;
 
                 onZoom(Math.max(minRowHeight, Math.min(maxRowHeight, newRowHeight)));
             } else if (isDragging === 'bottom') {
                 const newThumbHeight = Math.max(24, curThumbH + deltaY);
 
-                const newTotalHeight = (curVisH * curVisH) / newThumbHeight;
+                const newTotalHeight = (safeVisH * safeVisH) / newThumbHeight;
                 const newRowHeight = newTotalHeight / curTotal;
                 onZoom(Math.max(minRowHeight, Math.min(maxRowHeight, newRowHeight)));
             }

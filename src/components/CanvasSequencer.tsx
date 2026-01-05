@@ -86,7 +86,8 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
     onSetScrollTop,
     activeRowsByKeyboard = {},
     paused = false,
-    isResizing = false
+    isResizing = false,
+    rowHeight: rowHeightProp
 }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -138,6 +139,13 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
     useEffect(() => { scrollTopRef.current = scrollTop; }, [scrollTop]);
     useEffect(() => { isUnrolledRef.current = isUnrolled; }, [isUnrolled]);
 
+    // Update dimensions when rowHeightProp changes externally (e.g. via Zoom scrollbar)
+    useEffect(() => {
+        if (rowHeightProp && isUnrolled && rowHeightProp !== dimensions.rowHeight) {
+            setDimensions(prev => ({ ...prev, rowHeight: rowHeightProp }));
+        }
+    }, [rowHeightProp, isUnrolled, dimensions.rowHeight]);
+
     // Unified Dimension Management (Resize & Scaling)
     useEffect(() => {
         const container = containerRef.current;
@@ -156,10 +164,13 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
             const newStepWidth = (width - LABEL_WIDTH) / STEPS_PER_PATTERN;
 
             // 2. Calculate Vertical Row Height
-            let newRowHeight = rowHeight || 40;
+            let newRowHeight = rowHeightProp || 40;
             if (!isUnrolled) {
                 // Key View: Dynamic height to fill screen (min 32px to ensure readbility)
                 newRowHeight = Math.max(32, Math.floor(height / Math.max(1, rowConfigs.length)));
+            } else if (!rowHeightProp) {
+                // Fallback for Unrolled if no prop
+                newRowHeight = dimensionsRef.current.rowHeight || 40;
             }
 
             // Update State
