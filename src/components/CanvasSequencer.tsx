@@ -155,10 +155,11 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
             const newStepWidth = (width - LABEL_WIDTH) / STEPS_PER_PATTERN;
 
             // 2. Calculate Vertical Row Height
-            let newRowHeight = 40; // Fixed height for consistent scrolling
-            // if (!isUnrolled) {
-            //     newRowHeight = Math.max(24, Math.floor(height / rowConfigs.length));
-            // }
+            let newRowHeight = 40;
+            if (!isUnrolled) {
+                // Key View: Dynamic height to fill screen (min 32px to ensure readbility)
+                newRowHeight = Math.max(32, Math.floor(height / Math.max(1, rowConfigs.length)));
+            }
 
             // Update State
             setDimensions({ rowHeight: newRowHeight, stepWidth: newStepWidth });
