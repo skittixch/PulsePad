@@ -330,6 +330,15 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
                     ctx.roundRect(x + w - HANDLE_WIDTH, y + 2, HANDLE_WIDTH, h, [0, 4, 4, 0]);
                     ctx.fill();
                 }
+
+                // Octave Indicator (if not 0)
+                if (note.oct && note.oct !== 0) {
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                    ctx.font = 'bold 10px Inter';
+                    ctx.textAlign = 'center';
+                    // Draw centered
+                    ctx.fillText((note.oct > 0 ? '+' : '') + note.oct, x + w / 2, y + h / 2 + 4);
+                }
             });
         });
 

@@ -65,7 +65,8 @@ const remapGrid = (sourcePart: TrackPart, targetScaleName: string, targetUnrolle
       });
 
       if (bestR !== -1) {
-        newGrid[bestR][c] = { ...note, oct: targetUnrolled ? bestOct : 0 };
+        // PRESERVE OCTAVE: Use bestOct even in Key View to maintain pitch
+        newGrid[bestR][c] = { ...note, oct: bestOct };
       }
     });
   });
