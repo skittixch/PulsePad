@@ -153,6 +153,122 @@ const EQVisualizer: React.FC<{ params: any }> = ({ params }) => {
 
     return <canvas ref={canvasRef} width={200} height={80} className="w-full h-full" />;
 };
+
+const FadeVisualizer: React.FC<{ params: any, onUpdate: (p: any) => void }> = ({ params, onUpdate }) => {
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const [dragging, setDragging] = useState<'p1' | 'p2' | null>(null);
+
+    const cx1 = params.cx1 ?? 0.25;
+    const cy1 = params.cy1 ?? 0.1;
+    const cx2 = params.cx2 ?? 0.25;
+    const cy2 = params.cy2 ?? 1.0;
+
+    const width = 176;
+    const height = 64;
+
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        ctx.clearRect(0, 0, width, height);
+
+        // Draw grid
+        ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let i = 1; i < 4; i++) {
+            ctx.moveTo(i * width / 4, 0); ctx.lineTo(i * width / 4, height);
+            ctx.moveTo(0, i * height / 4); ctx.lineTo(width, i * height / 4);
+        }
+        ctx.stroke();
+
+        // Draw Bezier Curve
+        ctx.beginPath();
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 3;
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = 'rgba(56, 189, 248, 0.5)';
+        ctx.moveTo(0, height);
+        ctx.bezierCurveTo(cx1 * width, height - (cy1 * height), cx2 * width, height - (cy2 * height), width, 0);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        // Draw handles
+        ctx.setLineDash([2, 4]);
+        ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, height); ctx.lineTo(cx1 * width, height - (cy1 * height));
+        ctx.moveTo(width, 0); ctx.lineTo(cx2 * width, height - (cy2 * height));
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Handle dots
+        ctx.fillStyle = '#fff';
+        ctx.beginPath(); ctx.arc(cx1 * width, height - (cy1 * height), 4, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(cx2 * width, height - (cy2 * height), 4, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#38bdf8';
+        ctx.beginPath(); ctx.arc(cx1 * width, height - (cy1 * height), 2.5, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(cx2 * width, height - (cy2 * height), 2.5, 0, Math.PI * 2); ctx.fill();
+    }, [cx1, cy1, cx2, cy2]);
+
+    const handleInteraction = (clientX: number, clientY: number) => {
+        if (!canvasRef.current) return;
+        const rect = canvasRef.current.getBoundingClientRect();
+        const x = Math.max(0, Math.min(1, (clientX - rect.left) / width));
+        const y = Math.max(0, Math.min(1, 1 - (clientY - rect.top) / height));
+
+        if (dragging === 'p1') onUpdate({ ...params, cx1: x, cy1: y });
+        else if (dragging === 'p2') onUpdate({ ...params, cx2: x, cy2: y });
+    };
+
+    return (
+        <div className="flex flex-col gap-1.5 mt-1">
+            <div className="relative group/fade">
+                <canvas
+                    ref={canvasRef}
+                    width={width}
+                    height={height}
+                    onMouseDown={(e) => {
+                        e.stopPropagation();
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const x = (e.clientX - rect.left) / width;
+                        const y = 1 - (e.clientY - rect.top) / height;
+                        const d1 = Math.sqrt((x - cx1) ** 2 + (y - cy1) ** 2);
+                        const d2 = Math.sqrt((x - cx2) ** 2 + (y - cy2) ** 2);
+                        if (d1 < 0.2) setDragging('p1');
+                        else if (d2 < 0.2) setDragging('p2');
+                    }}
+                    onMouseMove={(e) => {
+                        if (dragging) {
+                            e.stopPropagation();
+                            handleInteraction(e.clientX, e.clientY);
+                        }
+                    }}
+                    onMouseUp={() => setDragging(null)}
+                    onMouseLeave={() => setDragging(null)}
+                    className="bg-slate-950/80 rounded-lg border border-white/5 cursor-crosshair w-full"
+                />
+            </div>
+            <div className="flex gap-1">
+                <button
+                    onClick={() => onUpdate({ ...params, cx1: 0, cy1: 0, cx2: 1, cy2: 1 })}
+                    className="flex-1 bg-slate-800 hover:bg-sky-500/20 hover:text-sky-400 text-[7px] font-black py-1 rounded-md transition-all uppercase tracking-tighter border border-white/5"
+                >
+                    Linear
+                </button>
+                <button
+                    onClick={() => onUpdate({ ...params, cx1: 0.4, cy1: 0, cx2: 0.6, cy2: 1 })}
+                    className="flex-1 bg-slate-800 hover:bg-sky-500/20 hover:text-sky-400 text-[7px] font-black py-1 rounded-md transition-all uppercase tracking-tighter border border-white/5"
+                >
+                    Sigmoid
+                </button>
+            </div>
+        </div>
+    );
+};
 export const NODE_WIDTH = 200;
 export const NODE_PADDING = 60;
 
@@ -273,6 +389,16 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
                 { id: "newMin", label: "Out Min", min: -10, max: 10, step: 0.1, default: 0, type: "scalar" },
                 { id: "newMax", label: "Out Max", min: -10, max: 10, step: 0.1, default: 1, type: "scalar" }
             ]
+        },
+        fadeIn: {
+            name: "Fade In", color: "border-sky-400", inType: "audio", outType: "audio",
+            params: [
+                { id: "duration", label: "Time (s)", min: 0.1, max: 10, step: 0.1, default: 2.0, type: "scalar" },
+                { id: "cx1", label: "CX1", min: 0, max: 1, step: 0.01, default: 0.25, type: "scalar", hidden: true },
+                { id: "cy1", label: "CY1", min: 0, max: 1, step: 0.01, default: 0.1, type: "scalar", hidden: true },
+                { id: "cx2", label: "CX2", min: 0, max: 1, step: 0.01, default: 0.25, type: "scalar", hidden: true },
+                { id: "cy2", label: "CY2", min: 0, max: 1, step: 0.01, default: 1.0, type: "scalar", hidden: true }
+            ]
         }
     };
 
@@ -312,6 +438,8 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
     const panningPrevented = useRef(false);
     const isShiftPressedRef = useRef(false);
     const pendingCutsRef = useRef<FXConnection[]>([]);
+    const [draggingParam, setDraggingParam] = useState<{ nodeId: string, paramId: string, min: number, max: number, step: number, width: number } | null>(null);
+    const paramDragRef = useRef<{ startX: number, startVal: number, ctrl: boolean } | null>(null);
 
 
     // rAF Loop Update
@@ -513,6 +641,17 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
         const worldMouseX = mousePosRef.current.x - panOffset.x;
         const worldMouseY = mousePosRef.current.y - panOffset.y;
 
+        let hitX = worldMouseX;
+        let hitY = worldMouseY;
+
+        if (draggingNode) {
+            const dragNodeData = graph.nodes.find(n => n.id === draggingNode);
+            if (dragNodeData) {
+                hitX = dragNodeData.x;
+                hitY = dragNodeData.y + 55;
+            }
+        }
+
         const newHovered: FXConnection[] = [];
         let singleNearest: FXConnection | null = null;
         let singleMinDist = 20;
@@ -543,7 +682,8 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
                 } else {
                     const pIdx = dstDef.params.findIndex((p: any) => p.id === conn.targetPort);
                     if (pIdx !== -1) {
-                        targetY = dstNode.y + 45 + pIdx * 40 + 20;
+                        // Math: 45px header + 12px padding + (idx * 44px spacing) + 16px (half port height)
+                        targetY = dstNode.y + 73 + pIdx * 44;
                         targetType = dstDef.params[pIdx].type;
                     }
                 }
@@ -557,13 +697,13 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
 
             // Hit testing for highlight
             ctx.lineWidth = 15; // Hit area
-            if (ctx.isPointInStroke(path, worldMouseX, worldMouseY)) {
+            if (ctx.isPointInStroke(path, hitX, hitY)) {
                 if (isShiftPressedRef.current) {
                     newHovered.push(conn);
                 } else {
                     // Simple distance check after isPointInStroke to find nearest
-                    const dx = worldMouseX - (x1 + x2) / 2;
-                    const dy = worldMouseY - (y1 + targetY) / 2;
+                    const dx = hitX - (x1 + x2) / 2;
+                    const dy = hitY - (y1 + targetY) / 2;
                     const d = Math.sqrt(dx * dx + dy * dy);
                     if (d < singleMinDist) {
                         singleMinDist = d;
@@ -1018,6 +1158,26 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
         setActiveCable(null);
     };
 
+    const handleParamMouseDown = (e: React.MouseEvent, nodeId: string, pDef: any) => {
+        if (getDrivenValue(nodeId, pDef.id) !== null) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        const rect = e.currentTarget.getBoundingClientRect();
+        const node = graph.nodes.find(n => n.id === nodeId);
+        const startVal = node?.params[pDef.id] ?? pDef.default;
+
+        setDraggingParam({
+            nodeId,
+            paramId: pDef.id,
+            min: pDef.min,
+            max: pDef.max,
+            step: pDef.step,
+            width: rect.width
+        });
+        paramDragRef.current = { startX: e.clientX, startVal, ctrl: e.ctrlKey };
+    };
+
     const handleNodeMouseDown = (e: React.MouseEvent, nodeId: string) => {
         e.preventDefault();
         e.stopPropagation();
@@ -1070,7 +1230,44 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
         const worldX = screenX - panOffset.x;
         const worldY = screenY - panOffset.y;
 
-        if (draggingNode) {
+        if (draggingParam) {
+            if (!paramDragRef.current || paramDragRef.current.ctrl !== e.ctrlKey) {
+                const node = graph.nodes.find(n => n.id === draggingParam.nodeId);
+                const currentVal = node?.params[draggingParam.paramId] ?? (draggingParam.min + draggingParam.max) / 2;
+                paramDragRef.current = { startX: e.clientX, startVal: currentVal, ctrl: e.ctrlKey };
+            }
+
+            const { startX, startVal } = paramDragRef.current;
+            const { nodeId, paramId, min, max, step, width } = draggingParam;
+            const deltaX = e.clientX - startX;
+            const sensitivity = e.ctrlKey ? 0.1 : 1.0;
+            const range = max - min;
+
+            let newVal = startVal + (deltaX / width) * range * sensitivity;
+            newVal = Math.max(min, Math.min(max, newVal));
+
+            if (step > 0) {
+                newVal = Math.round(newVal / step) * step;
+            }
+
+            // Magnetic snap for LFO rate
+            const node = graph.nodes.find(n => n.id === nodeId);
+            if (node?.type === 'lfo' && paramId === 'rate' && !e.shiftKey) {
+                const SNAP_VALUES = [0.125, 0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0];
+                let closest = SNAP_VALUES[0];
+                let minDiff = Infinity;
+                for (const s of SNAP_VALUES) {
+                    const diff = Math.abs(newVal - s);
+                    if (diff < minDiff) {
+                        minDiff = diff;
+                        closest = s;
+                    }
+                }
+                if (minDiff < 0.25) newVal = closest;
+            }
+
+            updateParam(nodeId, paramId, newVal);
+        } else if (draggingNode) {
             const node = graph.nodes.find(n => n.id === draggingNode);
             if (!node) return;
 
@@ -1253,6 +1450,11 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
             onCommitGraph(graph);
         }
 
+        if (draggingParam) {
+            onCommitGraph(graph);
+        }
+        setDraggingParam(null);
+        paramDragRef.current = null;
         setDraggingNode(null);
         setActiveCable(null);
         setIsPanning(false);
@@ -1292,13 +1494,12 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
             panningPrevented.current = false;
             return;
         }
-        const rect = containerRef.current?.getBoundingClientRect();
-        if (!rect) return;
-        setContextMenu({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+        setContextMenu({ x: e.clientX, y: e.clientY });
     };
 
     const addNode = (type: keyof typeof NODE_DEFS) => {
-        if (!contextMenu) return;
+        if (!contextMenu || !containerRef.current) return;
+        const rect = containerRef.current.getBoundingClientRect();
         const id = `node_${Date.now()}`;
         const def = (NODE_DEFS as any)[type];
         const params: Record<string, number> = {};
@@ -1309,8 +1510,8 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
         const newNode: FXNode = {
             id,
             type: type as any,
-            x: contextMenu.x - panOffset.x,
-            y: contextMenu.y - panOffset.y,
+            x: (contextMenu.x - rect.left) - panOffset.x,
+            y: (contextMenu.y - rect.top) - panOffset.y,
             params
         };
 
@@ -1616,7 +1817,7 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
                             top: node.y + panOffset.y,
                             width: NODE_WIDTH,
                             zIndex: draggingNode === node.id ? 100 : 1,
-                            minHeight: def.isMixer ? (45 + (Math.max(2, graph.connections.filter(c => c.target === node.id && c.targetPort?.startsWith('in_')).reduce((max, c) => Math.max(max, parseInt(c.targetPort?.split('_')[1] || '0')), -1) + 2)) * 36) : (getNodeOutputs(node).length > 0 ? (45 + getNodeOutputs(node).length * 36) : (def.params.length > 0 ? (45 + def.params.length * 40) : 'auto'))
+                            minHeight: def.isMixer ? (45 + (Math.max(2, graph.connections.filter(c => c.target === node.id && c.targetPort?.startsWith('in_')).reduce((max, c) => Math.max(max, parseInt(c.targetPort?.split('_')[1] || '0')), -1) + 2)) * 36) : (getNodeOutputs(node).length > 0 ? (45 + getNodeOutputs(node).length * 36) : (def.params.length > 0 ? (45 + 12 + def.params.length * 44) : 'auto'))
                         }}
                         onDragStart={(e) => e.preventDefault()}
                     >
@@ -1643,6 +1844,7 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
 
                         <div className="p-3 flex flex-col gap-[12px]" onMouseDown={(e) => e.stopPropagation()}>
                             {def.params.map((pDef: any) => {
+                                if (pDef.hidden) return null;
                                 const typeColors = { scalar: 'border-sky-500', int: 'border-emerald-500', audio: 'border-indigo-500' };
                                 const portColor = typeColors[pDef.type as keyof typeof typeColors] || 'border-slate-600';
                                 const drivenVal = getDrivenValue(node.id, pDef.id);
@@ -1736,68 +1938,42 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
                                             </div>
                                         </div>
 
-                                        <div className="relative w-full h-1 bg-slate-800 rounded overflow-hidden">
-                                            {pDef.type !== 'bool' && (
-                                                <>
-                                                    <input
-                                                        type="range"
-                                                        min={pDef.min} max={pDef.max} step={pDef.step}
-                                                        value={node.params[pDef.id] ?? pDef.default}
-                                                        disabled={hasInput}
-                                                        onChange={(e) => {
-                                                            const val = parseFloat(e.target.value);
-                                                            let finalVal = pDef.type === 'int' ? Math.round(val) : val;
-
-                                                            // MAGNETIC SNAP FOR LFO RATE
-                                                            const isShiftHeld = (e.nativeEvent as any).shiftKey;
-                                                            if (node.type === 'lfo' && pDef.id === 'rate' && !isShiftHeld) {
-                                                                const SNAP_VALUES = [0.125, 0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0];
-                                                                // Find nearest snap
-                                                                let closest = SNAP_VALUES[0];
-                                                                let minDiff = Infinity;
-
-                                                                for (const s of SNAP_VALUES) {
-                                                                    const diff = Math.abs(val - s);
-                                                                    if (diff < minDiff) {
-                                                                        minDiff = diff;
-                                                                        closest = s;
-                                                                    }
-                                                                }
-
-                                                                // Snap threshold (e.g., within 0.5 units or so, relative to magnitude?)
-                                                                // actually, since these are log-like, a fixed threshold might be weird.
-                                                                // Let's try a simple distance check.
-                                                                if (minDiff < 0.25) {
-                                                                    finalVal = closest;
-                                                                }
-                                                            }
-
-                                                            updateParam(node.id, pDef.id, finalVal);
-                                                        }}
-                                                        onMouseDown={(e) => e.stopPropagation()}
-                                                        className={`absolute inset-0 w-full accent-indigo-500 h-1 rounded cursor-pointer z-10 ${hasInput ? 'opacity-20 grayscale cursor-not-allowed' : 'opacity-100'}`}
-                                                    />
-                                                    {hasInput ? (
-                                                        <div
-                                                            className="absolute inset-y-0 bg-sky-400 opacity-50 z-0 transition-opacity duration-75"
-                                                            style={{
-                                                                left: 0,
-                                                                width: `${((Math.max(pDef.min, Math.min(pDef.max, drivenVal)) - pDef.min) / (pDef.max - pDef.min)) * 100}%`
-                                                            }}
+                                        <div
+                                            className={`relative w-full h-4 -mt-1.5 flex items-center cursor-pointer group/slider ${hasInput ? 'pointer-events-none' : ''}`}
+                                            onMouseDown={(e) => handleParamMouseDown(e, node.id, pDef)}
+                                        >
+                                            <div className="relative w-full h-1 bg-slate-800 rounded overflow-hidden pointer-events-none">
+                                                {pDef.type !== 'bool' && (
+                                                    <>
+                                                        <input
+                                                            type="range"
+                                                            min={pDef.min} max={pDef.max} step={pDef.step}
+                                                            value={node.params[pDef.id] ?? pDef.default}
+                                                            readOnly
+                                                            className={`absolute inset-0 w-full accent-indigo-500 h-1 rounded pointer-events-none ${hasInput ? 'opacity-20 grayscale' : 'opacity-100'}`}
                                                         />
-                                                    ) : (
-                                                        node.modulations?.[pDef.id] !== 'none' && (
+                                                        {hasInput ? (
                                                             <div
-                                                                className="absolute inset-y-0 left-0 bg-sky-500/30 transition-all duration-75"
+                                                                className="absolute inset-y-0 bg-sky-400 opacity-50 z-0 transition-opacity duration-75"
                                                                 style={{
-                                                                    width: `${(modVals[node.modulations?.[pDef.id] as keyof typeof modVals] || 0) * 100}%`,
-                                                                    boxShadow: '0 0 10px rgba(14, 165, 233, 0.5)'
+                                                                    left: 0,
+                                                                    width: `${((Math.max(pDef.min, Math.min(pDef.max, drivenVal)) - pDef.min) / (pDef.max - pDef.min)) * 100}%`
                                                                 }}
                                                             />
-                                                        )
-                                                    )}
-                                                </>
-                                            )}
+                                                        ) : (
+                                                            node.modulations?.[pDef.id] !== 'none' && (
+                                                                <div
+                                                                    className="absolute inset-y-0 left-0 bg-sky-500/30 transition-all duration-75"
+                                                                    style={{
+                                                                        width: `${(modVals[node.modulations?.[pDef.id] as keyof typeof modVals] || 0) * 100}%`,
+                                                                        boxShadow: '0 0 10px rgba(14, 165, 233, 0.5)'
+                                                                    }}
+                                                                />
+                                                            )
+                                                        )}
+                                                    </>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                 );
@@ -1820,85 +1996,101 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
                                     <EQVisualizer params={node.params} />
                                 </div>
                             )}
+                            {node.type === 'fadeIn' && (
+                                <FadeVisualizer
+                                    params={node.params}
+                                    onUpdate={(newParams) => {
+                                        const newNode = { ...node, params: newParams };
+                                        const newNodes = graph.nodes.map(n => n.id === node.id ? newNode : n);
+                                        onUpdateGraph({ ...graph, nodes: newNodes });
+                                    }}
+                                />
+                            )}
                         </div>
 
                         {/* Multi-port logic for source/others */}
-                        {(() => {
-                            const outputs = getNodeOutputs(node);
-                            if (outputs.length === 0) return null;
-                            return (
-                                <div className="absolute top-[45px] right-0 flex flex-col gap-[16px] pointer-events-none items-end">
-                                    {outputs.map((out: any) => (
-                                        <div key={out.id} className="relative flex items-center justify-end">
-                                            <span className="mr-2 text-[10px] font-black text-slate-500/80 uppercase tracking-widest pointer-events-none">
-                                                {out.label}
-                                            </span>
-                                            <div
-                                                className={`w-5 h-5 bg-slate-800 border-2 ${out.type === 'audio' ? 'border-indigo-500' : 'border-sky-500'} rounded-full hover:bg-indigo-500 transition-colors pointer-events-auto cursor-pointer flex items-center justify-center translate-x-1/2`}
-                                                onMouseDown={(e) => handleMouseDownPort(e, node.id, out.id)}
-                                                title={`${out.label} (${out.type})`}
-                                            >
-                                                <div className="w-2 h-2 bg-slate-400 rounded-full opacity-50" />
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            );
-                        })()}
-
-                        {node.type !== 'source' && (
-                            <div className="absolute left-0 top-[45px] flex flex-col gap-[16px] pointer-events-none items-start">
-                                {def.isMixer ? (
-                                    // Dynamic mixer ports
-                                    (() => {
-                                        const mixerConns = graph.connections.filter(c => c.target === node.id && c.targetPort?.startsWith('in_'));
-                                        const maxIdx = mixerConns.reduce((max, c) => Math.max(max, parseInt(c.targetPort?.split('_')[1] || '0')), -1);
-                                        const portCount = Math.max(2, maxIdx + 2);
-
-                                        return Array.from({ length: portCount }).map((_, idx) => (
-                                            <div key={`in_${idx}`} className="relative flex items-center">
+                        {
+                            (() => {
+                                const outputs = getNodeOutputs(node);
+                                if (outputs.length === 0) return null;
+                                return (
+                                    <div className="absolute top-[45px] right-0 flex flex-col gap-[16px] pointer-events-none items-end">
+                                        {outputs.map((out: any) => (
+                                            <div key={out.id} className="relative flex items-center justify-end">
+                                                <span className="mr-2 text-[10px] font-black text-slate-500/80 uppercase tracking-widest pointer-events-none">
+                                                    {out.label}
+                                                </span>
                                                 <div
-                                                    className={`w-5 h-5 bg-slate-800 border-2 border-indigo-500 rounded-full hover:bg-sky-500 transition-colors pointer-events-auto cursor-pointer flex items-center justify-center -translate-x-1/2`}
-                                                    onMouseDown={(e) => handleMouseDownInputPort(e, node.id, `in_${idx}`)}
-                                                    onMouseUp={() => handleMouseUpPort(node.id, `in_${idx}`)}
-                                                    title={`Mixer Input ${idx + 1}`}
+                                                    className={`w-5 h-5 bg-slate-800 border-2 ${out.type === 'audio' ? 'border-indigo-500' : 'border-sky-500'} rounded-full hover:bg-indigo-500 transition-colors pointer-events-auto cursor-pointer flex items-center justify-center translate-x-1/2`}
+                                                    onMouseDown={(e) => handleMouseDownPort(e, node.id, out.id)}
+                                                    title={`${out.label} (${out.type})`}
                                                 >
                                                     <div className="w-2 h-2 bg-slate-400 rounded-full opacity-50" />
                                                 </div>
-                                                <span className="ml-2 text-[10px] font-black text-slate-500/80 uppercase tracking-widest pointer-events-none">
-                                                    IN {idx + 1}
-                                                </span>
                                             </div>
-                                        ));
-                                    })()
-                                ) : (
-                                    <div
-                                        className={`w-5 h-5 bg-slate-800 border-2 ${def.inType === 'audio' ? 'border-indigo-500' : 'border-sky-500'} rounded-full hover:bg-sky-500 transition-colors pointer-events-auto cursor-pointer flex items-center justify-center -translate-x-1/2`}
-                                        onMouseDown={(e) => handleMouseDownInputPort(e, node.id, '')}
-                                        onMouseUp={() => handleMouseUpPort(node.id, '')}
-                                        title={`${def.name} Input`}
-                                    >
-                                        <div className="w-2 h-2 bg-slate-400 rounded-full opacity-50" />
+                                        ))}
                                     </div>
-                                )}
-                            </div>
-                        )}
-                        {node.type !== 'output' && getNodeOutputs(node).length === 0 && (
-                            <div
-                                className={`absolute right-0 top-[55px] translate-x-1/2 -translate-y-1/2 w-5 h-5 bg-slate-800 border-2 ${def.outType === 'audio' ? 'border-indigo-500' : (def.outType === 'scalar' ? 'border-sky-500' : 'border-emerald-500')} rounded-full hover:bg-indigo-500 transition-colors pointer-events-auto cursor-pointer flex items-center justify-center`}
-                                onMouseDown={(e) => handleMouseDownPort(e, node.id)}
-                                title={`Output (${def.outType || 'audio'})`}
-                            >
-                                <div className="w-2 h-2 bg-slate-400 rounded-full opacity-50" />
-                            </div>
-                        )}
+                                );
+                            })()
+                        }
+
+                        {
+                            node.type !== 'source' && (
+                                <div className="absolute left-0 top-[45px] flex flex-col gap-[16px] pointer-events-none items-start">
+                                    {def.isMixer ? (
+                                        // Dynamic mixer ports
+                                        (() => {
+                                            const mixerConns = graph.connections.filter(c => c.target === node.id && c.targetPort?.startsWith('in_'));
+                                            const maxIdx = mixerConns.reduce((max, c) => Math.max(max, parseInt(c.targetPort?.split('_')[1] || '0')), -1);
+                                            const portCount = Math.max(2, maxIdx + 2);
+
+                                            return Array.from({ length: portCount }).map((_, idx) => (
+                                                <div key={`in_${idx}`} className="relative flex items-center">
+                                                    <div
+                                                        className={`w-5 h-5 bg-slate-800 border-2 border-indigo-500 rounded-full hover:bg-sky-500 transition-colors pointer-events-auto cursor-pointer flex items-center justify-center -translate-x-1/2`}
+                                                        onMouseDown={(e) => handleMouseDownInputPort(e, node.id, `in_${idx}`)}
+                                                        onMouseUp={() => handleMouseUpPort(node.id, `in_${idx}`)}
+                                                        title={`Mixer Input ${idx + 1}`}
+                                                    >
+                                                        <div className="w-2 h-2 bg-slate-400 rounded-full opacity-50" />
+                                                    </div>
+                                                    <span className="ml-2 text-[10px] font-black text-slate-500/80 uppercase tracking-widest pointer-events-none">
+                                                        IN {idx + 1}
+                                                    </span>
+                                                </div>
+                                            ));
+                                        })()
+                                    ) : (
+                                        <div
+                                            className={`w-5 h-5 bg-slate-800 border-2 ${def.inType === 'audio' ? 'border-indigo-500' : 'border-sky-500'} rounded-full hover:bg-sky-500 transition-colors pointer-events-auto cursor-pointer flex items-center justify-center -translate-x-1/2`}
+                                            onMouseDown={(e) => handleMouseDownInputPort(e, node.id, '')}
+                                            onMouseUp={() => handleMouseUpPort(node.id, '')}
+                                            title={`${def.name} Input`}
+                                        >
+                                            <div className="w-2 h-2 bg-slate-400 rounded-full opacity-50" />
+                                        </div>
+                                    )}
+                                </div>
+                            )
+                        }
+                        {
+                            node.type !== 'output' && getNodeOutputs(node).length === 0 && (
+                                <div
+                                    className={`absolute right-0 top-[55px] translate-x-1/2 -translate-y-1/2 w-5 h-5 bg-slate-800 border-2 ${def.outType === 'audio' ? 'border-indigo-500' : (def.outType === 'scalar' ? 'border-sky-500' : 'border-emerald-500')} rounded-full hover:bg-indigo-500 transition-colors pointer-events-auto cursor-pointer flex items-center justify-center`}
+                                    onMouseDown={(e) => handleMouseDownPort(e, node.id)}
+                                    title={`Output (${def.outType || 'audio'})`}
+                                >
+                                    <div className="w-2 h-2 bg-slate-400 rounded-full opacity-50" />
+                                </div>
+                            )
+                        }
                     </div>
                 );
             })}
 
             {contextMenu && (
                 <div
-                    className="absolute bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-2 w-48 z-[200] overflow-hidden backdrop-blur-xl"
+                    className="fixed bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-2 w-48 z-[200] overflow-hidden backdrop-blur-xl"
                     style={{ left: contextMenu.x, top: contextMenu.y }}
                     onMouseDown={(e) => e.stopPropagation()}
                 >
@@ -1919,41 +2111,46 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
                 <span>Right Click to Add Node</span>
             </div>
             {nodeContextMenu && (
-                <div
-                    className="fixed bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-2 w-48 z-[201] overflow-hidden backdrop-blur-xl"
-                    style={{ left: nodeContextMenu.x, top: nodeContextMenu.y }}
-                    onMouseDown={(e) => e.stopPropagation()}
-                >
-                    <div className="px-4 py-1 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-white/5 mb-1">Node Options</div>
-                    {graph.nodes.find(n => n.id === nodeContextMenu.nodeId)?.type === 'source' && (
-                        graph.nodes.find(n => n.id === nodeContextMenu.nodeId)?.params.splitOutputs === 1 ? (
-                            <button
-                                onClick={() => handleMergeOutputs(nodeContextMenu.nodeId)}
-                                className="w-full text-left px-4 py-2 text-xs font-bold text-rose-400 hover:bg-rose-500 hover:text-white transition-colors uppercase tracking-tight"
-                            >
-                                Merge Outputs
-                            </button>
-                        ) : (
-                            <button
-                                onClick={() => handleSplitOutputs(nodeContextMenu.nodeId)}
-                                className="w-full text-left px-4 py-2 text-xs font-bold text-sky-400 hover:bg-sky-500 hover:text-white transition-colors uppercase tracking-tight"
-                            >
-                                Split Outputs
-                            </button>
-                        )
-                    )}
-                    <button
-                        onClick={() => {
-                            const newNodes = graph.nodes.filter(n => n.id !== nodeContextMenu.nodeId);
-                            const newConns = graph.connections.filter(c => c.source !== nodeContextMenu.nodeId && c.target !== nodeContextMenu.nodeId);
-                            onCommitGraph({ ...graph, nodes: newNodes, connections: newConns });
-                            setNodeContextMenu(null);
-                        }}
-                        className="w-full text-left px-4 py-2 text-xs font-bold text-slate-400 hover:bg-red-500 hover:text-white transition-colors uppercase tracking-tight"
+                <>
+                    <div className="fixed inset-0 z-[200]" onClick={() => setNodeContextMenu(null)} />
+                    <div
+                        className="fixed bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-2 w-48 z-[201] overflow-hidden backdrop-blur-xl"
+                        style={{ left: nodeContextMenu.x, top: nodeContextMenu.y }}
+                        onMouseDown={(e) => e.stopPropagation()}
                     >
-                        Delete Node
-                    </button>
-                </div>
+                        <div className="px-4 py-1 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-white/5 mb-1">Node Options</div>
+                        {graph.nodes.find(n => n.id === nodeContextMenu.nodeId)?.type === 'source' && (
+                            graph.nodes.find(n => n.id === nodeContextMenu.nodeId)?.params.splitOutputs === 1 ? (
+                                <button
+                                    onClick={() => handleMergeOutputs(nodeContextMenu.nodeId)}
+                                    className="w-full text-left px-4 py-2 text-xs font-bold text-rose-400 hover:bg-rose-500 hover:text-white transition-colors uppercase tracking-tight"
+                                >
+                                    Merge Outputs
+                                </button>
+                            ) : (
+                                (trackCount || 0) > 1 && (
+                                    <button
+                                        onClick={() => handleSplitOutputs(nodeContextMenu.nodeId)}
+                                        className="w-full text-left px-4 py-2 text-xs font-bold text-sky-400 hover:bg-sky-500 hover:text-white transition-colors uppercase tracking-tight"
+                                    >
+                                        Split Outputs
+                                    </button>
+                                )
+                            )
+                        )}
+                        <button
+                            onClick={() => {
+                                const newNodes = graph.nodes.filter(n => n.id !== nodeContextMenu.nodeId);
+                                const newConns = graph.connections.filter(c => c.source !== nodeContextMenu.nodeId && c.target !== nodeContextMenu.nodeId);
+                                onCommitGraph({ ...graph, nodes: newNodes, connections: newConns });
+                                setNodeContextMenu(null);
+                            }}
+                            className="w-full text-left px-4 py-2 text-xs font-bold text-slate-400 hover:bg-red-500 hover:text-white transition-colors uppercase tracking-tight"
+                        >
+                            Delete Node
+                        </button>
+                    </div>
+                </>
             )}
         </div>
     );

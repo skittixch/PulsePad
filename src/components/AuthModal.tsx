@@ -7,9 +7,10 @@ interface AuthModalProps {
     isOpen: boolean;
     onClose: () => void;
     user: User | null;
+    onToast?: (message: string) => void;
 }
 
-export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, user }) => {
+export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, user, onToast }) => {
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
 
@@ -19,11 +20,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, user }) =
         setLoading(true);
         setError(null);
         try {
-            await signInWithPopup(auth, provider);
+            // Race: Login vs 30s Timeout to prevent hanging on mobile
+            await Promise.race([
+                signInWithPopup(auth, provider),
+                new Promise((_, reject) => setTimeout(() => reject(new Error("Login timed out. Please try again.")), 30000))
+            ]);
             onClose();
         } catch (err: any) {
             console.error("Login failed", err);
-            setError(err.message || "Failed to log in");
+            // On mobile, "Popup closed" or timeout is common.
+            // We set the error to display it.
+            const msg = err.message || "Failed to log in";
+            setError(msg);
+
+            // "Flash that there was an error... and revert"
+            if (onToast) onToast("Login Error: " + msg);
+            onClose();
         } finally {
             setLoading(false);
         }

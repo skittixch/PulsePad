@@ -3,7 +3,7 @@ import type { Note, RowConfig } from '../types';
 import { STEPS_PER_PATTERN } from '../constants';
 
 interface InteractionState {
-    type: 'idle' | 'drawing' | 'resizing-left' | 'resizing-right' | 'moving' | 'strumming' | 'selecting' | 'moving-group' | 'resizing-left-group' | 'resizing-right-group';
+    type: 'idle' | 'drawing' | 'resizing-left' | 'resizing-right' | 'moving' | 'strumming' | 'selecting' | 'moving-group' | 'resizing-left-group' | 'resizing-right-group' | 'stretching' | 'rolling-edit';
     startX: number;
     startY: number;
     startTime: number;
@@ -26,6 +26,16 @@ interface InteractionState {
     hoveredRow?: number;
     isCloning?: boolean;
     selectionRect?: { x1: number; y1: number; x2: number; y2: number };
+    rollingEdit?: {
+        r: number;
+        note1: { c: number, note: Note };
+        note2: { c: number, note: Note };
+        initialSplitC: number;
+        currentSplitC: number;
+    };
+    stretchRatio?: number;
+    stretchOriginC?: number;
+    stretchSide?: 'left' | 'right';
 }
 
 interface CanvasSequencerProps {
@@ -49,6 +59,7 @@ interface CanvasSequencerProps {
     activeRowsByKeyboard?: Record<number, boolean>;
     playheadDistance?: number;
     paused?: boolean;
+    isResizing?: boolean;
 }
 
 const LABEL_WIDTH = 80;
@@ -73,12 +84,15 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
     scrollTop,
     onSetScrollTop,
     activeRowsByKeyboard = {},
-    paused = false
+    paused = false,
+    isResizing = false
 }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const [interaction, setInteraction] = useState<InteractionState>({ type: 'idle', startX: 0, startY: 0, startTime: 0 });
     const [isRazorMode, setIsRazorMode] = useState(false);
+    const [isPenMode, setIsPenMode] = useState(false);
+    const [smoothing, setSmoothing] = useState(0);
     const [dimensions, setDimensions] = useState({ rowHeight: 40, stepWidth: 60 });
     const { rowHeight } = dimensions;
 
@@ -92,11 +106,21 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
     const snapRef = useRef(snap);
     const selectedNotesRef = useRef(selectedNotes || []);
     const isRazorModeRef = useRef(isRazorMode);
+    const isPenModeRef = useRef(isPenMode);
+    const smoothingRef = useRef(smoothing);
+    const smoothedPos = useRef({ x: 0, y: 0 });
+    const lastPenPos = useRef<{ r: number, c: number } | null>(null);
     const rowConfigsRef = useRef(rowConfigs);
     const scrollTopRef = useRef(scrollTop);
     const isUnrolledRef = useRef(isUnrolled);
 
+    // Transform: Auto-enabled for multi-selection
+
+    const activePointersRef = useRef<Map<number, { x: number, y: number }>>(new Map());
+    const initialPinchDistanceRef = useRef<number | null>(null);
+
     useEffect(() => { gridRef.current = grid; }, [grid]);
+
     useEffect(() => { interactionRef.current = interaction; }, [interaction]);
     useEffect(() => { playbackStepRef.current = playbackStep; }, [playbackStep]);
     useEffect(() => { playheadDistanceRef.current = playheadDistance; }, [playheadDistance]);
@@ -107,6 +131,8 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
     useEffect(() => { snapRef.current = snap; }, [snap]);
     useEffect(() => { selectedNotesRef.current = selectedNotes || []; }, [selectedNotes]);
     useEffect(() => { isRazorModeRef.current = isRazorMode; }, [isRazorMode]);
+    useEffect(() => { isPenModeRef.current = isPenMode; }, [isPenMode]);
+    useEffect(() => { smoothingRef.current = smoothing; }, [smoothing]);
     useEffect(() => { rowConfigsRef.current = rowConfigs; }, [rowConfigs]);
     useEffect(() => { scrollTopRef.current = scrollTop; }, [scrollTop]);
     useEffect(() => { isUnrolledRef.current = isUnrolled; }, [isUnrolled]);
@@ -119,6 +145,10 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
         const handleResize = (entries: ResizeObserverEntry[]) => {
             const entry = entries[0];
             if (!entry) return;
+
+            // Skip expensive recalculations during active resizing interaction
+            if (isResizing) return;
+
             const { width, height } = entry.contentRect;
 
             // 1. Calculate Horizontal Step Width
@@ -147,7 +177,7 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
         observer.observe(container);
 
         return () => observer.disconnect();
-    }, [isUnrolled, rowConfigs.length]);
+    }, [isUnrolled, rowConfigs.length, isResizing]);
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -395,6 +425,121 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
             ctx.fillStyle = 'rgba(56, 189, 248, 0.1)';
             ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
             ctx.setLineDash([]);
+        } else if (currentInteraction.type === 'stretching' && currentInteraction.stretchRatio !== undefined && currentInteraction.stretchOriginC !== undefined) {
+            const { stretchRatio, stretchOriginC } = currentInteraction;
+
+            // Draw Ghost Notes & Target Notes
+            currentSelected.forEach(({ r, c }: { r: number, c: number }) => {
+                const note = currentGrid[r]?.[c];
+                if (!note) return;
+
+                // Ghost Calculation (Unquantized)
+                const ghostC = stretchOriginC + (c - stretchOriginC) * stretchRatio;
+                const ghostD = note.d * stretchRatio;
+
+                const gX = LABEL_WIDTH + ghostC * sW + 2;
+                const gY = r * rH + 2 - currentScrollTop;
+                const gW = ghostD * sW - 4;
+                const h = rH - 4;
+
+                // Ghost Draw
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+                ctx.beginPath();
+                ctx.roundRect(gX, gY, gW, h, 4);
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+                ctx.setLineDash([2, 2]);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // Target Calculation (Quantized)
+                let targetC = stretchOriginC + (c - stretchOriginC) * stretchRatio;
+                let targetD = note.d * stretchRatio;
+
+                // Snap logic
+                if (currentSnap > 1) {
+                    // Round start and duration
+                    // But stretching implies relative positions snap too?
+                    // Simple approach: Snap calculated C and D
+                    targetC = Math.round(targetC / currentSnap) * currentSnap;
+                    targetD = Math.max(currentSnap, Math.round(targetD / currentSnap) * currentSnap);
+                } else {
+                    targetC = Math.round(targetC);
+                    targetD = Math.max(1, Math.round(targetD));
+                }
+
+                const tX = LABEL_WIDTH + targetC * sW + 2;
+                const tW = targetD * sW - 4;
+
+                // Solid Target Draw
+                ctx.strokeStyle = '#22d3ee'; // cyan-400
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.roundRect(tX, gY, tW, h, 4);
+                ctx.stroke();
+                ctx.lineWidth = 1;
+            });
+        }
+
+        // Rolling Edit Preview
+        if (currentInteraction.type === 'rolling-edit' && currentInteraction.rollingEdit) {
+            const { r, note1, note2, currentSplitC } = currentInteraction.rollingEdit;
+            const h = rH - 4;
+            const gY = r * rH + 2 - currentScrollTop;
+
+            // Target 1
+            const tX1 = LABEL_WIDTH + note1.c * sW + 2;
+            const tW1 = (currentSplitC - note1.c) * sW - 4;
+            ctx.strokeStyle = '#fff';
+            ctx.setLineDash([5, 5]);
+            ctx.strokeRect(tX1, gY, tW1, h);
+
+            // Target 2
+            const tX2 = LABEL_WIDTH + currentSplitC * sW + 2;
+            const tW2 = ((note2.c + note2.note.d) - currentSplitC) * sW - 4;
+            ctx.strokeRect(tX2, gY, tW2, h);
+            ctx.setLineDash([]);
+        }
+
+        // Transform Box Overlay
+        // Show automatically if more than 1 note is selected
+        if (currentSelected.length > 1 && currentInteraction.type !== 'stretching') {
+            // Calculate bounds
+            let minC = Infinity, maxC = -Infinity, minR = Infinity, maxR = -Infinity;
+            currentSelected.forEach(({ r, c }) => {
+                const note = currentGrid[r]?.[c];
+                if (!note) return;
+                minC = Math.min(minC, c);
+                maxC = Math.max(maxC, c + note.d);
+                minR = Math.min(minR, r);
+                maxR = Math.max(maxR, r);
+            });
+
+            if (minC !== Infinity) {
+                const x1 = LABEL_WIDTH + minC * sW;
+                const x2 = LABEL_WIDTH + maxC * sW;
+                const y1 = minR * rH - currentScrollTop;
+                const y2 = (maxR + 1) * rH - currentScrollTop;
+
+                ctx.strokeStyle = '#22d3ee';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+                // Left Handle
+                ctx.beginPath();
+                ctx.arc(x1, y1 + (y2 - y1) / 2, 6, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Right Handle
+                ctx.beginPath();
+                ctx.arc(x2, y1 + (y2 - y1) / 2, 6, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Label
+                ctx.fillStyle = '#22d3ee';
+                ctx.font = 'bold 10px Inter';
+                ctx.fillText("TRANSFORM", x1 + 4, y1 - 4);
+            }
         }
 
         // 4. Draw Playback Head
@@ -469,6 +614,36 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
 
         if (screenX < LABEL_WIDTH) return { type: 'strumming', r, c: -1 };
 
+        // Transform Handle Detection - Prioritize OVER individual note interactions
+        if (selectedNotesRef.current.length > 1) {
+            let minC = Infinity, maxC = -Infinity, minR = Infinity, maxR = -Infinity;
+            selectedNotesRef.current.forEach(({ r, c }: { r: number, c: number }) => {
+                const note = gridRef.current[r]?.[c];
+                if (!note) return;
+                minC = Math.min(minC, c);
+                maxC = Math.max(maxC, c + note.d);
+                minR = Math.min(minR, r);
+                maxR = Math.max(maxR, r);
+            });
+
+            if (minC !== Infinity) {
+                const x1 = LABEL_WIDTH + minC * sW;
+                const x2 = LABEL_WIDTH + maxC * sW;
+                const y1 = minR * rH - scrollTopRef.current;
+                const y2 = (maxR + 1) * rH - scrollTopRef.current;
+                const handleY = y1 + (y2 - y1) / 2;
+
+                // Check proximity to right handle
+                if (Math.abs(screenX - x2) < 20 && Math.abs((e.clientY - rect.top) - handleY) < 20) {
+                    return { type: 'stretching', r: -1, c: minC, side: 'right' };
+                }
+                // Check proximity to left handle
+                if (Math.abs(screenX - x1) < 20 && Math.abs((e.clientY - rect.top) - handleY) < 20) {
+                    return { type: 'stretching', r: -1, c: maxC, side: 'left' };
+                }
+            }
+        }
+
         const currentSnap = snapRef.current;
         let c = Math.floor(x / sW);
         if (currentSnap > 1) c = Math.floor(c / currentSnap) * currentSnap;
@@ -481,23 +656,107 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
                     const noteStartX = checkC * sW;
                     const relativeX = x - noteStartX;
                     const EDGE_THRESHOLD = 15;
-                    if (relativeX < EDGE_THRESHOLD) return { type: 'resizing-left', r, c: checkC, note };
-                    if (relativeX > note.d * sW - EDGE_THRESHOLD) return { type: 'resizing-right', r, c: checkC, note };
+                    if (relativeX < EDGE_THRESHOLD) {
+                        // Check for Rolling Edit (Left Edge)
+                        if (checkC > 0) {
+                            // Find any note in this row that ends at checkC
+                            for (let pC = 0; pC < checkC; pC++) {
+                                const pn = currentGrid[r][pC];
+                                if (pn && pC + pn.d === checkC) {
+                                    return { type: 'rolling-edit', r, c: checkC, note, secondNote: { c: pC, note: pn } };
+                                }
+                            }
+                        }
+                        return { type: 'resizing-left', r, c: checkC, note };
+                    }
+                    if (relativeX > note.d * sW - EDGE_THRESHOLD) {
+                        // Check for Rolling Edit (Right Edge)
+                        const nextStart = checkC + note.d;
+                        if (nextStart < STEPS_PER_PATTERN) {
+                            const nextNote = currentGrid[r][nextStart];
+                            if (nextNote) {
+                                return { type: 'rolling-edit', r, c: checkC, note, secondNote: { c: nextStart, note: nextNote } };
+                            }
+                        }
+                        return { type: 'resizing-right', r, c: checkC, note };
+                    }
                     return { type: 'moving', r, c: checkC, note };
                 }
             }
         }
+
+
+
         return { type: 'empty', r, c };
     };
 
     const handlePointerDown = (e: React.PointerEvent) => {
+        // Track pointers for multi-touch
+        activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
         const hit = getInteractionAt(e);
         const startTime = Date.now();
+
 
         if (e.button === 1) {
             if (hit.type === 'moving' || hit.type === 'resizing-left' || hit.type === 'resizing-right') {
                 onToggleNote(hit.r, hit.c!);
             }
+            return;
+        }
+
+        if (e.ctrlKey || e.metaKey) {
+            const rect = canvasRef.current!.getBoundingClientRect();
+            setInteraction({
+                type: 'selecting',
+                startX: e.clientX,
+                startY: e.clientY,
+                startTime,
+                selectionRect: {
+                    x1: e.clientX - rect.left,
+                    y1: e.clientY - rect.top,
+                    x2: e.clientX - rect.left,
+                    y2: e.clientY - rect.top
+                }
+            });
+            return;
+        }
+
+        if (hit.type === 'stretching') {
+            setInteraction({
+                type: 'stretching',
+                startX: e.clientX,
+                startY: e.clientY,
+                startTime,
+                stretchOriginC: hit.c,
+                stretchRatio: 1,
+                stretchSide: (hit as any).side
+            });
+            return;
+        }
+
+        if (hit.type === 'rolling-edit') {
+            const { r, note, secondNote } = hit as any;
+            // note1 is always the one on the left
+            const note1 = hit.c < secondNote.c ? { c: hit.c, note: note! } : { c: secondNote.c, note: secondNote.note };
+            const note2 = hit.c < secondNote.c ? { c: secondNote.c, note: secondNote.note } : { c: hit.c, note: note! };
+
+            // Preview the primary note of the boundary
+            onPreviewNote(r, note1.note);
+
+            setInteraction({
+                type: 'rolling-edit',
+                startX: e.clientX,
+                startY: e.clientY,
+                startTime,
+                rollingEdit: {
+                    r,
+                    note1,
+                    note2,
+                    initialSplitC: note2.c,
+                    currentSplitC: note2.c
+                }
+            });
             return;
         }
 
@@ -525,19 +784,7 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
             return;
         }
 
-        if (e.ctrlKey || e.metaKey) {
-            const rect = canvasRef.current!.getBoundingClientRect();
-            const startX = e.clientX - rect.left;
-            const startY = e.clientY - rect.top;
-            setInteraction({
-                type: 'selecting',
-                startX: e.clientX,
-                startY: e.clientY,
-                startTime,
-                selectionRect: { x1: startX, y1: startY, x2: startX, y2: startY }
-            });
-            return;
-        }
+
 
         const isHitSelected = selectedNotesRef.current.some((sn: { r: number, c: number }) => sn.r === hit.r && sn.c === hit.c);
         if (isHitSelected) {
@@ -577,18 +824,66 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
                 lastStrummedOctave: hit.note!.oct || 0
             });
         } else if (hit.type === 'empty') {
-            if (selectedNotesRef.current.length > 0) {
-                onSelectNotes?.([]);
-                setInteraction({ type: 'idle', startX: e.clientX, startY: e.clientY, startTime });
-                return;
+            if (isPenModeRef.current) {
+                // Pen Mode Init
+                const rect = canvasRef.current!.getBoundingClientRect();
+                const startX = e.clientX - rect.left - LABEL_WIDTH;
+                const startY = e.clientY - rect.top + scrollTopRef.current;
+
+                smoothedPos.current = { x: startX, y: startY };
+                lastPenPos.current = { r: hit.r, c: hit.c! };
+
+                onAddNote(hit.r, hit.c!, 1, { oct: 0, v: 0.8 }); // Default velocity
+                setInteraction({ type: 'drawing', startX: e.clientX, startY: e.clientY, startTime });
+            } else {
+                if (selectedNotesRef.current.length > 0) {
+                    onSelectNotes?.([]);
+                }
+                onPreviewNote(hit.r, { d: 1, o: 0, oct: 0 });
+                setInteraction({ type: 'drawing', startX: e.clientX, startY: e.clientY, startTime, tempNote: { r: hit.r, c: hit.c, d: 1, oct: 0 }, lastStrummedR: hit.r, lastStrummedOctave: 0 });
             }
-            onPreviewNote(hit.r, { d: 1, o: 0, oct: 0 }); // Start sound for new note
-            setInteraction({ type: 'drawing', startX: e.clientX, startY: e.clientY, startTime, tempNote: { r: hit.r, c: hit.c, d: 1, oct: 0 }, lastStrummedR: hit.r, lastStrummedOctave: 0 });
         }
     };
 
+
     const handlePointerMove = useCallback((e: PointerEvent) => {
         if (!canvasRef.current) return;
+
+        // Update pointer position
+        if (activePointersRef.current.has(e.pointerId)) {
+            activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        }
+
+        // Handle Pinch Logic
+        if (activePointersRef.current.size === 2) {
+            const pointers = Array.from(activePointersRef.current.values());
+            const dist = Math.abs(pointers[0].x - pointers[1].x);
+
+            if (initialPinchDistanceRef.current === null) {
+                initialPinchDistanceRef.current = dist;
+                // Initialize stretch if notes are selected
+                if (selectedNotesRef.current.length > 0) {
+                    let minC = Infinity; // Pivot
+                    selectedNotesRef.current.forEach(({ c }: { r: number, c: number }) => minC = Math.min(minC, c));
+                    setInteraction({
+                        type: 'stretching',
+                        startX: 0, // Not used for pinch
+                        startY: 0,
+                        startTime: Date.now(),
+                        stretchOriginC: minC,
+                        stretchRatio: 1
+                    });
+                }
+            } else {
+                const ratio = Math.max(0.1, dist / (initialPinchDistanceRef.current || 1));
+                // Only update if we successfully started a stretch interaction
+                if (interactionRef.current.type === 'stretching') {
+                    setInteraction(prev => ({ ...prev, stretchRatio: ratio }));
+                }
+            }
+            return;
+        }
+
         const currentInteraction = interactionRef.current;
         const rect = canvasRef.current.getBoundingClientRect();
         const screenX = e.clientX - rect.left;
@@ -606,6 +901,7 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
             } else if (hit.type === 'resizing-left' || hit.type === 'resizing-right') canvasRef.current.style.cursor = 'ew-resize';
             else if (hit.type === 'moving') canvasRef.current.style.cursor = 'grab';
             else if (hit.type === 'strumming') canvasRef.current.style.cursor = 'ns-resize';
+            else if (hit.type === 'stretching') canvasRef.current.style.cursor = 'ew-resize';
             else canvasRef.current.style.cursor = 'crosshair';
             setInteraction(prev => ({ ...prev, hoveredHit: hit as any, hoveredRow: hit.type === 'strumming' ? hit.r : undefined }));
             return;
@@ -623,11 +919,52 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
             }
         }
 
-        if (currentInteraction.type === 'drawing' && currentInteraction.tempNote) {
-            const currentSnap = snapRef.current;
-            let newD = Math.max(1, currentC - currentInteraction.tempNote.c + 1);
-            if (currentSnap > 1) newD = Math.ceil(newD / currentSnap) * currentSnap;
-            setInteraction(prev => ({ ...prev, tempNote: prev.tempNote ? { ...prev.tempNote, d: newD } : undefined }));
+        const hit = getInteractionAt(e);
+        if (canvasRef.current) {
+            if (hit.type === 'rolling-edit') canvasRef.current.style.cursor = 'col-resize';
+            else if (hit.type === 'resizing-left' || hit.type === 'resizing-right') canvasRef.current.style.cursor = 'ew-resize';
+            else canvasRef.current.style.cursor = 'default';
+        }
+
+        if (currentInteraction.type === 'drawing') {
+            if (isPenModeRef.current) {
+                // PEN MODE LOGIC
+                const targetX = screenX - LABEL_WIDTH;
+                const targetY = (e.clientY - rect.top) + scrollTopRef.current;
+
+                // Smoothing (EMA)
+                const smoothFactor = Math.max(0.01, 1 - smoothingRef.current);
+                smoothedPos.current.x += (targetX - smoothedPos.current.x) * smoothFactor;
+                smoothedPos.current.y += (targetY - smoothedPos.current.y) * smoothFactor;
+
+                const penR = Math.floor(smoothedPos.current.y / rH);
+                const penC = Math.floor(smoothedPos.current.x / sW);
+
+                // Bresenham-like Interpolation
+                if (lastPenPos.current) {
+                    const startR = lastPenPos.current.r;
+                    const startC = lastPenPos.current.c;
+                    const dr = penR - startR;
+                    const dc = penC - startC;
+                    const dist = Math.max(Math.abs(dr), Math.abs(dc));
+
+                    for (let i = 1; i <= dist; i++) {
+                        const r = Math.round(startR + (dr * i) / dist);
+                        const c = Math.round(startC + (dc * i) / dist);
+
+                        if (r >= 0 && r < rowConfigsRef.current.length && c >= 0 && c < STEPS_PER_PATTERN) {
+                            // Only add if not same as last added (simple check, backend handles dups usually)
+                            onAddNote(r, c, 1, { oct: 0, v: 0.8 });
+                        }
+                    }
+                    lastPenPos.current = { r: penR, c: penC };
+                }
+            } else if (currentInteraction.tempNote) {
+                const currentSnap = snapRef.current;
+                let newD = Math.max(1, currentC - currentInteraction.tempNote.c + 1);
+                if (currentSnap > 1) newD = Math.ceil(newD / currentSnap) * currentSnap;
+                setInteraction(prev => ({ ...prev, tempNote: prev.tempNote ? { ...prev.tempNote, d: newD } : undefined }));
+            }
         } else if (currentInteraction.activeNote) {
             if (currentInteraction.type === 'moving') {
                 const deltaC = currentC - Math.floor(((currentInteraction.startX - rect.left) - LABEL_WIDTH) / sW);
@@ -652,12 +989,52 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
         } else if (currentInteraction.type === 'resizing-left-group' || currentInteraction.type === 'resizing-right-group') {
             const deltaC = currentC - Math.floor(((currentInteraction.startX - rect.left) - LABEL_WIDTH) / sW);
             setInteraction(prev => ({ ...prev, deltaC }));
+        } else if (currentInteraction.type === 'rolling-edit' && currentInteraction.rollingEdit) {
+            const { rollingEdit } = currentInteraction;
+            const initialXInCols = (currentInteraction.startX - rect.left - LABEL_WIDTH) / sW;
+            const currentXInCols = x / sW;
+            const deltaC = Math.round(currentXInCols - initialXInCols);
+            let newSplitC = rollingEdit.initialSplitC + deltaC;
+
+            // Snap
+            if (snapRef.current > 1) {
+                newSplitC = Math.round(newSplitC / snapRef.current) * snapRef.current;
+            }
+
+            // Constrain
+            const minC = rollingEdit.note1.c + 1;
+            const maxC = rollingEdit.note2.c + rollingEdit.note2.note.d - 1;
+            const constrainedSplitC = Math.max(minC, Math.min(maxC, newSplitC));
+
+            setInteraction(prev => ({
+                ...prev,
+                rollingEdit: prev.rollingEdit ? { ...prev.rollingEdit, currentSplitC: constrainedSplitC } : undefined
+            }));
+            if (canvasRef.current) canvasRef.current.style.cursor = 'col-resize';
+        } else if (currentInteraction.type === 'stretching') {
+            const { startX, stretchOriginC } = currentInteraction;
+            if (stretchOriginC === undefined) return;
+
+            const pivotX = LABEL_WIDTH + stretchOriginC * sW;
+            const initialWidth = startX - rect.left - pivotX;
+            const currentWidth = e.clientX - rect.left - pivotX;
+
+            // Avoid divide by zero. Use a small epsilon if width is 0.
+            const denom = initialWidth === 0 ? 1 : initialWidth;
+            const ratio = Math.max(0.1, currentWidth / denom);
+            setInteraction(prev => ({ ...prev, stretchRatio: ratio }));
+            if (canvasRef.current) canvasRef.current.style.cursor = 'ew-resize';
         } else if (currentInteraction.type === 'selecting') {
             setInteraction(prev => ({ ...prev, selectionRect: prev.selectionRect ? { ...prev.selectionRect, x2: e.clientX - rect.left, y2: e.clientY - rect.top } : undefined }));
         }
     }, [onPreviewNote]);
 
     const handlePointerUp = useCallback((e: PointerEvent) => {
+        activePointersRef.current.delete(e.pointerId);
+        if (activePointersRef.current.size < 2) {
+            initialPinchDistanceRef.current = null;
+        }
+
         const currentInteraction = interactionRef.current;
         const isQuickClick = Date.now() - currentInteraction.startTime < 250;
 
@@ -671,7 +1048,13 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
                 // IMPORTANT: Only toggle selection if it was a quick click.
                 // If it was a long hold (even without moving), do NOT select.
                 if (isQuickClick) {
-                    onSelectNotes?.([{ r: startR, c: startC }]);
+                    // Mobile: Tap (Touch) to delete, since there's no middle-click/delete key.
+                    // Desktop: Click to select.
+                    if (e.pointerType === 'touch') {
+                        onToggleNote(startR, startC);
+                    } else {
+                        onSelectNotes?.([{ r: startR, c: startC }]);
+                    }
                 }
             } else if (currentInteraction.isCloning) {
                 onAddNote(currentR, currentC, currentD, { ...note, d: currentD });
@@ -738,10 +1121,53 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
                 }
             });
             onSelectNotes?.(selected);
+        } else if (currentInteraction.type === 'stretching' && currentInteraction.stretchRatio && currentInteraction.stretchOriginC !== undefined) {
+            const { stretchRatio, stretchOriginC } = currentInteraction;
+            const currentSnap = snapRef.current;
+
+            const movements = selectedNotesRef.current.map(({ r, c }) => {
+                const note = gridRef.current[r]?.[c];
+                if (!note) return null;
+
+                let targetC = stretchOriginC + (c - stretchOriginC) * stretchRatio;
+                let targetD = note.d * stretchRatio;
+
+                if (currentSnap > 1) {
+                    targetC = Math.round(targetC / currentSnap) * currentSnap;
+                    targetD = Math.max(currentSnap, Math.round(targetD / currentSnap) * currentSnap);
+                } else {
+                    targetC = Math.round(targetC);
+                    targetD = Math.max(1, Math.round(targetD));
+                }
+
+                // Only adding if changed?
+                return { fromR: r, fromC: c, toR: r, toC: targetC, data: { d: targetD, oct: note.oct } };
+            }).filter((m): m is NonNullable<typeof m> => m !== null);
+
+            if (movements.length > 0) {
+                onCommitMultiNote?.(movements);
+            }
+        } else if (currentInteraction.type === 'rolling-edit' && currentInteraction.rollingEdit) {
+            const { rollingEdit } = currentInteraction;
+            const { r, note1, note2, currentSplitC } = rollingEdit;
+
+            if (currentSplitC !== rollingEdit.initialSplitC) {
+                const movements = [
+                    {
+                        fromR: r, fromC: note1.c, toR: r, toC: note1.c,
+                        data: { d: currentSplitC - note1.c, oct: note1.note.oct }
+                    },
+                    {
+                        fromR: r, fromC: note2.c, toR: r, toC: currentSplitC,
+                        data: { d: (note2.c + note2.note.d) - currentSplitC, oct: note2.note.oct }
+                    }
+                ];
+                onCommitMultiNote?.(movements);
+            }
         }
 
         // Stop audio for all sustained interaction types
-        const sustainedTypes = ['strumming', 'drawing', 'moving', 'moving-group', 'resizing-left', 'resizing-right', 'resizing-left-group', 'resizing-right-group'];
+        const sustainedTypes = ['strumming', 'drawing', 'moving', 'moving-group', 'resizing-left', 'resizing-right', 'resizing-left-group', 'resizing-right-group', 'rolling-edit'];
         if (sustainedTypes.includes(currentInteraction.type)) {
             onStopPreviewNote();
         }
@@ -809,6 +1235,34 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
 
     return (
         <div ref={containerRef} className="w-full h-full relative cursor-crosshair overflow-hidden touch-none" onWheel={handleWheel}>
+            {/* Toolbar Overlay */}
+            <div className="absolute top-2 right-2 flex items-center gap-2 z-50 pointer-events-auto">
+                <button
+                    onClick={() => { setIsPenMode(!isPenMode); setIsRazorMode(false); }}
+                    className={`p-1.5 rounded-lg border backdrop-blur-sm transition-all text-xs font-bold uppercase flex items-center gap-2 ${isPenMode ? 'bg-sky-500/20 border-sky-400 text-sky-400 shadow-[0_0_10px_rgba(56,189,248,0.3)]' : 'bg-slate-900/60 border-slate-700 text-slate-400 hover:text-white'}`}
+                    title="Pen Tool (P)"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                    <span>Pen</span>
+                </button>
+                {isPenMode && (
+                    <div className="flex items-center gap-2 bg-slate-900/80 p-1.5 rounded-lg border border-slate-700 backdrop-blur-sm">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase">Smooth</span>
+                        <input
+                            type="range"
+                            min="0"
+                            max="0.95"
+                            step="0.05"
+                            value={smoothing}
+                            onChange={(e) => setSmoothing(parseFloat(e.target.value))}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            className="w-16 accent-sky-500 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer"
+                        />
+                        <span className="text-[10px] text-sky-400 w-6 text-right font-mono">{(smoothing * 100).toFixed(0)}%</span>
+                    </div>
+                )}
+            </div>
             <div className="absolute left-0 top-0 bottom-0 w-[80px] bg-slate-900/90 z-10 border-r border-white/5 pointer-events-none" style={{ transform: `translateY(-${scrollTop}px)` }}>
                 {rowConfigs.map((config, i) => (
                     <div key={i} style={{ height: `${rowHeight}px` }} className={`flex items-center justify-end pr-3 text-[10px] font-bold uppercase transition-all duration-75 ${activeRowsByKeyboard[i] ? 'bg-white text-slate-900 scale-110 shadow-[0_0_20px_white] z-30' : interaction.type === 'strumming' && interaction.lastStrummedR === i ? 'bg-sky-500 text-white scale-110 shadow-[0_0_15px_#0ea5e9] z-20' : interaction.hoveredRow === i ? 'bg-slate-800 text-slate-200' : 'text-slate-500'}`}>

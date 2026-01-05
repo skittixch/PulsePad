@@ -32,6 +32,9 @@ interface ArrangementViewProps {
     isLoggedIn: boolean;
     selectedPatterns: { tIdx: number, pIdx: number }[];
     onSelectPatterns: (patterns: { tIdx: number, pIdx: number }[]) => void;
+    onStretchPatterns: (patterns: { tIdx: number, pIdx: number }[], ratio: number) => void;
+    isBuildMode: boolean;
+    onToggleBuildMode: (val: boolean) => void;
 }
 
 export const ArrangementView: React.FC<ArrangementViewProps> = ({
@@ -42,9 +45,7 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
     queuedPatternIndex,
     trackLoops,
     onSelectPattern,
-    onInsertPattern,
     onDeletePattern,
-    onDuplicatePattern,
     onQueuePattern,
     onTrackLoopChange,
     onMovePattern,
@@ -62,14 +63,23 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
     onSaveClick,
     isLoggedIn,
     selectedPatterns,
-    onSelectPatterns
+    onSelectPatterns,
+    onStretchPatterns,
+    isBuildMode,
+    onToggleBuildMode
 }) => {
     const [dropPlaceholder, setDropPlaceholder] = React.useState<{ tIdx: number, pIdx: number } | null>(null);
     const [draggingItem, setDraggingItem] = React.useState<{ tIdx: number, pIdx: number } | null>(null);
     const [mousePos, setMousePos] = React.useState<{ x: number, y: number } | null>(null);
     const [dragVelocity, setDragVelocity] = React.useState(0);
+    const [stretching, setStretching] = React.useState<{ startX: number, startWidth: number, patterns: { tIdx: number, pIdx: number }[] } | null>(null);
+    const [stretchRatio, setStretchRatio] = React.useState(1.0);
     const lastMouseX = React.useRef(0);
     const itemsRef = React.useRef<(HTMLDivElement | null)[]>([]);
+
+    const trackHeight = 53;
+    const partWidth = 132;
+    const headerWidth = 118;
 
     const formatTime = (seconds: number) => {
         const mins = Math.floor(seconds / 60);
@@ -80,6 +90,17 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
     const maxLength = Math.max(...tracks.map(t => t.parts.length), 1);
     const totalSeconds = maxLength * STEPS_PER_PATTERN * (60.0 / bpm / 4);
     const currentSeconds = (playbackPatternIndex * STEPS_PER_PATTERN + playbackStep) * (60.0 / bpm / 4);
+
+    const hasSolo = tracks.some(t => t.soloed);
+    let trackOffsets: number[] = [];
+    if (isBuildMode) {
+        let acc = 0;
+        trackOffsets = tracks.map(t => {
+            const v = acc;
+            acc += (t.parts.length || 0);
+            return v;
+        });
+    }
 
     return (
         <div
@@ -92,6 +113,20 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                 setDragVelocity(prev => (prev * 0.8) + (delta * 0.5));
                 lastMouseX.current = e.clientX;
                 setMousePos({ x: e.clientX, y: e.clientY });
+            }}
+            onMouseMove={(e) => {
+                if (stretching) {
+                    const deltaX = e.clientX - stretching.startX;
+                    const newRatio = Math.max(0.1, (stretching.startWidth + deltaX) / stretching.startWidth);
+                    setStretchRatio(newRatio);
+                }
+            }}
+            onMouseUp={() => {
+                if (stretching) {
+                    onStretchPatterns(stretching.patterns, stretchRatio);
+                    setStretching(null);
+                    setStretchRatio(1.0);
+                }
             }}
         >
             {/* Custom Drag Overlay */}
@@ -150,6 +185,17 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
 
                 <div className="flex items-center gap-6">
                     <button
+                        onClick={() => onToggleBuildMode(!isBuildMode)}
+                        className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest transition-all border ${isBuildMode
+                            ? 'bg-amber-500 border-amber-400 text-white shadow-[0_0_15px_rgba(245,158,11,0.3)]'
+                            : 'bg-slate-800 border-slate-700 text-slate-500 hover:text-white'
+                            }`}
+                        title="Build Mode: Tracks enter sequentially"
+                    >
+                        Build Mode {isBuildMode ? 'ON' : 'OFF'}
+                    </button>
+
+                    <button
                         onClick={onSaveClick}
                         className="px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest bg-sky-500/10 text-sky-400 border border-sky-500/20 hover:bg-sky-500/20 transition-all flex items-center gap-2"
                     >
@@ -175,9 +221,14 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto">
+            <div
+                className="flex-1 overflow-y-auto relative"
+                onMouseDown={() => {
+                    onSelectPatterns([]);
+                }}
+            >
                 {tracks.map((track, tIdx) => (
-                    <div key={track.id} className="flex items-center p-0.5 border-b border-white/5 last:border-0 min-w-max hover:bg-white/[0.02] transition-colors relative">
+                    <div key={track.id} style={{ height: trackHeight }} className="flex items-center p-0.5 border-b border-white/5 last:border-0 min-w-max hover:bg-white/[0.02] transition-colors relative box-border">
                         {/* Track Header */}
                         <div
                             className={`w-28 shrink-0 flex flex-col justify-start p-1 border-r border-slate-800 mr-1 cursor-context-menu ${tIdx === editingTrackIndex ? 'opacity-100' : 'opacity-60 hover:opacity-100 transition-opacity'}`}
@@ -255,15 +306,32 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                 const isLoopStart = myLoop && pIdx === myLoop[0];
                                 const isLoopEnd = myLoop && pIdx === myLoop[1];
 
-                                let activePartIdx = playbackPatternIndex;
-                                if (myLoop) {
-                                    const [start, end] = myLoop;
-                                    const loopLen = (end - start) + 1;
-                                    activePartIdx = start + (playbackPatternIndex % loopLen);
-                                } else {
-                                    activePartIdx = playbackPatternIndex % track.parts.length;
+                                let effectiveGlobalPattern = playbackPatternIndex;
+                                if (isBuildMode) {
+                                    const offset = trackOffsets[tIdx] || 0;
+                                    if (playbackPatternIndex < offset) {
+                                        effectiveGlobalPattern = -1; // Not playing yet
+                                    } else {
+                                        effectiveGlobalPattern = playbackPatternIndex - offset;
+                                    }
                                 }
-                                const isPlayingPattern = isPlaying && pIdx === activePartIdx;
+
+                                let activePartIdx = -1;
+                                if (effectiveGlobalPattern !== -1) {
+                                    if (myLoop) {
+                                        const [start, end] = myLoop;
+                                        const loopLen = (end - start) + 1;
+                                        activePartIdx = start + (effectiveGlobalPattern % loopLen);
+                                    } else {
+                                        activePartIdx = effectiveGlobalPattern % (track.parts.length || 1);
+                                    }
+                                }
+
+                                const isWaitingBuild = isBuildMode && (playbackPatternIndex < (trackOffsets[tIdx] || 0));
+                                const isTrackMuted = track.muted || (hasSolo && !track.soloed);
+                                const isEligible = !isWaitingBuild && !isTrackMuted;
+
+                                const isPlayingPattern = isEligible && isPlaying && pIdx === activePartIdx;
                                 const isQueued = pIdx === queuedPatternIndex;
 
                                 const showPlaceholderBefore = dropPlaceholder?.tIdx === tIdx && dropPlaceholder?.pIdx === pIdx;
@@ -288,7 +356,7 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
 
                                         <div
                                             draggable
-                                            className={`transition-all duration-300 ${isBeingDragged ? 'w-0 opacity-0 m-0 overflow-hidden' : 'w-auto opacity-100 mr-1 mt-0.5 mb-0.5'}`}
+                                            className={`transition-all duration-300 ${isBeingDragged ? 'w-0 opacity-0 m-0 overflow-hidden' : 'w-auto opacity-100 mr-1'}`}
                                             onClick={(e) => {
                                                 onToggleFollow(false);
                                                 if (e.shiftKey) {
@@ -308,6 +376,7 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                                 }
                                             }}
                                             onMouseDown={(e) => {
+                                                e.stopPropagation();
                                                 if (e.button === 1) { // Middle Click
                                                     e.preventDefault();
                                                     onDeletePattern(tIdx, pIdx);
@@ -373,6 +442,7 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                                 isLoopEnd={!!isLoopEnd}
                                                 isQueued={isQueued}
                                                 isPlayingPattern={isPlayingPattern}
+                                                className={!isEligible ? 'opacity-40 grayscale' : ''}
                                                 playbackStep={playbackStep}
                                                 onClick={() => { }}
                                                 onMouseDown={() => { }}
@@ -405,36 +475,195 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                 );
                             })}
 
-                            <div className="flex gap-2 ml-4">
-                                <button
-                                    onClick={() => onInsertPattern(tIdx, track.parts.length)}
-                                    className="w-10 h-10 flex items-center justify-center bg-slate-950/40 border border-white/10 rounded-xl hover:bg-slate-800 hover:text-sky-400 transition-all text-slate-600"
-                                    title="Add Empty Part"
-                                >
-                                    <span className="text-lg font-bold">+</span>
-                                </button>
-                                <button
-                                    onClick={() => onDuplicatePattern(tIdx, track.parts.length - 1)}
-                                    className="w-10 h-10 flex items-center justify-center bg-slate-950/40 border border-white/10 rounded-xl hover:bg-slate-800 hover:text-sky-400 transition-all text-slate-600"
-                                    title="Duplicate Last Part"
-                                >
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
-                                </button>
-                            </div>
                         </div>
                     </div>
                 ))}
 
-                {/* Add Track Hover Zone */}
-                <div className="relative group/add-track h-8 -mt-2">
-                    <button
-                        onClick={onAddTrack}
-                        className="absolute left-1/2 -translate-x-1/2 top-0 -translate-y-1/2 w-8 h-8 rounded-full bg-slate-900 border border-slate-700 text-sky-500 shadow-2xl opacity-0 group-hover/add-track:opacity-100 flex items-center justify-center transition-all hover:scale-110 hover:bg-sky-500 hover:text-white z-20"
-                        title="Add New Track"
-                    >
-                        <span className="text-xl font-bold leading-none">+</span>
-                    </button>
-                    <div className="absolute inset-x-0 top-0 h-px bg-transparent group-hover/add-track:bg-sky-500/20 transition-colors" />
+                {/* Transform Box Overlay */}
+                {selectedPatterns.length >= 1 && !draggingItem && (
+                    (() => {
+                        let minT = Infinity, maxT = -Infinity, minP = Infinity, maxP = -Infinity;
+                        selectedPatterns.forEach(({ tIdx, pIdx }) => {
+                            minT = Math.min(minT, tIdx);
+                            maxT = Math.max(maxT, tIdx);
+                            minP = Math.min(minP, pIdx);
+                            maxP = Math.max(maxP, pIdx);
+                        });
+
+                        if (minT === Infinity) return null;
+
+                        const x1 = headerWidth + minP * partWidth;
+                        const x2 = headerWidth + (maxP + 1) * partWidth;
+                        const y1 = minT * trackHeight;
+                        const y2 = (maxT + 1) * trackHeight;
+
+                        const numPatterns = (maxP - minP) + 1;
+                        const actualX2 = stretching ? x1 + (x2 - x1) * stretchRatio : x2;
+
+                        // Snapped preview: Round the ratio so the total width is an integer multiple of patterns
+                        const snappedNumPatterns = Math.max(1, Math.round(numPatterns * (stretching ? stretchRatio : 1)));
+                        const snappedX2 = x1 + snappedNumPatterns * partWidth;
+
+                        return (
+                            <>
+                                {/* Snapped Outline (Dashed) */}
+                                {stretching && (
+                                    <div
+                                        className="absolute pointer-events-none z-20"
+                                        style={{
+                                            left: x1,
+                                            top: y1,
+                                            width: snappedX2 - x1,
+                                            height: y2 - y1,
+                                            border: '2px dashed rgba(255, 255, 255, 0.4)',
+                                            backgroundColor: 'rgba(255, 255, 255, 0.02)',
+                                            borderRadius: '8px',
+                                        }}
+                                    >
+                                        <div className="absolute inset-0 overflow-hidden opacity-30 pointer-events-none flex flex-col">
+                                            {selectedPatterns.map(({ tIdx, pIdx }) => {
+                                                const track = tracks[tIdx];
+                                                const part = track?.parts[pIdx];
+                                                if (!part) return null;
+                                                const pDisp = pIdx - minP;
+                                                const tDisp = tIdx - minT;
+                                                const snappedRatio = (snappedNumPatterns * STEPS_PER_PATTERN) / (numPatterns * STEPS_PER_PATTERN);
+
+                                                return (
+                                                    <div
+                                                        key={`${tIdx}-${pIdx}-snapped`}
+                                                        className="absolute"
+                                                        style={{
+                                                            left: 0,
+                                                            right: 0,
+                                                            top: tDisp * trackHeight,
+                                                            height: trackHeight
+                                                        }}
+                                                    >
+                                                        {part.grid.map((row, r) => (
+                                                            row.map((note, c) => {
+                                                                if (!note) return null;
+                                                                const globalStep = (pDisp * STEPS_PER_PATTERN) + c;
+                                                                const left = (Math.round(globalStep * snappedRatio) / (snappedNumPatterns * STEPS_PER_PATTERN)) * 100;
+                                                                const width = (Math.max(1, Math.round(note.d * snappedRatio)) / (snappedNumPatterns * STEPS_PER_PATTERN)) * 100;
+                                                                return (
+                                                                    <div
+                                                                        key={`${r}-${c}-snapped`}
+                                                                        className="absolute bg-white h-1.5 rounded-full"
+                                                                        style={{
+                                                                            left: `${left}%`,
+                                                                            width: `${width}%`,
+                                                                            top: `${(r / part.grid.length) * 100}%`
+                                                                        }}
+                                                                    />
+                                                                );
+                                                            })
+                                                        ))}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Fluid Ghost & Interaction Box */}
+                                <div
+                                    className="absolute pointer-events-none z-30"
+                                    style={{
+                                        left: x1,
+                                        top: y1,
+                                        width: actualX2 - x1,
+                                        height: y2 - y1,
+                                        border: '2px solid #22d3ee',
+                                        backgroundColor: 'rgba(34, 211, 238, 0.05)',
+                                        borderRadius: '8px',
+                                        boxShadow: '0 0 20px rgba(34, 211, 238, 0.2)'
+                                    }}
+                                >
+                                    <div className="absolute top-0 left-0 bg-sky-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-br-md leading-none uppercase tracking-widest">
+                                        Transform {stretching && `(${stretchRatio.toFixed(2)}x -> ${snappedNumPatterns} Parts)`}
+                                    </div>
+
+                                    {/* Mini-Note Visualization (Optimized) */}
+                                    {stretching && (
+                                        <div className="absolute inset-0 overflow-hidden opacity-40 pointer-events-none flex flex-col">
+                                            {selectedPatterns.map(({ tIdx, pIdx }) => {
+                                                const track = tracks[tIdx];
+                                                const part = track?.parts[pIdx];
+                                                if (!part) return null;
+                                                const pDisp = pIdx - minP;
+                                                const tDisp = tIdx - minT;
+
+                                                return (
+                                                    <div
+                                                        key={`${tIdx}-${pIdx}`}
+                                                        className="absolute"
+                                                        style={{
+                                                            left: 0,
+                                                            right: 0,
+                                                            top: tDisp * trackHeight,
+                                                            height: trackHeight
+                                                        }}
+                                                    >
+                                                        {part.grid.map((row, r) => (
+                                                            row.map((note, c) => {
+                                                                if (!note) return null;
+                                                                const globalStep = (pDisp * STEPS_PER_PATTERN) + c;
+                                                                const left = (globalStep / (numPatterns * STEPS_PER_PATTERN)) * 100;
+                                                                const width = (note.d / (numPatterns * STEPS_PER_PATTERN)) * 100;
+                                                                return (
+                                                                    <div
+                                                                        key={`${r}-${c}`}
+                                                                        className="absolute bg-sky-400 h-1 rounded-full"
+                                                                        style={{
+                                                                            left: `${left}%`,
+                                                                            width: `${width}%`,
+                                                                            top: `${(r / part.grid.length) * 100}%`
+                                                                        }}
+                                                                    />
+                                                                );
+                                                            })
+                                                        ))}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+
+                                    {/* Stretch Handle Right */}
+                                    <div
+                                        className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize pointer-events-auto hover:bg-sky-400 group flex items-center justify-center transition-colors"
+                                        onMouseDown={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            setStretching({
+                                                startX: e.clientX,
+                                                startWidth: x2 - x1,
+                                                patterns: [...selectedPatterns]
+                                            });
+                                        }}
+                                    >
+                                        <div className="w-1 h-8 bg-sky-300 rounded-full group-hover:bg-white opacity-50" />
+                                    </div>
+                                </div>
+                            </>
+                        );
+                    })()
+                )}
+
+                {/* Add Track Button (Aligned to Header) */}
+                <div className="flex items-center p-0.5 min-w-max relative mt-2 mb-8 group">
+                    <div className="w-28 shrink-0 flex justify-center mr-1">
+                        <button
+                            onClick={onAddTrack}
+                            className="w-full py-2 border-2 border-dashed border-slate-700/50 rounded-lg text-slate-500 hover:text-sky-400 hover:border-sky-500/50 hover:bg-sky-500/5 transition-all text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 group-hover:scale-105 active:scale-95"
+                            title="Add New Track"
+                        >
+                            <span className="text-sm leading-none">+</span> Track
+                        </button>
+                    </div>
+                    {/* Empty Grid Area - Visual continuation if needed, or just space */}
+                    <div className="flex-1 h-full opacity-0 pointer-events-none border-b border-transparent" />
                 </div>
             </div>
         </div >

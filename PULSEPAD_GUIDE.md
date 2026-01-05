@@ -27,6 +27,12 @@ The Arrangement View (top) manages the timeline and track structure.
 - **Looping**: Right-click a part to toggle its looping state. Independent looping allows for complex poly-rhythms.
 - **Management**: Middle-click to delete parts; `Ctrl + C / V` to copy and paste.
 
+### 3. Playback Modes
+Pulsepad offers specialized modes for live performance and structure building:
+
+- **Performance Mode**: When ON, the sequencer automatically duplicates the last created part as playback moves forward, enabling non-stop live recording and jam sessions.
+- **Build Mode**: When ON, tracks enter the arrangement sequentially rather than all at once. Each track waits for all parts in the preceding tracks to finish playing before starting its own sequence. This allows for effortless "building" of an arrangement as new tracks are added.
+
 ### 3. Nodal Interface (FX Graph)
 The Nodal Interface allows you to route audio from the Sequencer through various effects and modulation sources.
 

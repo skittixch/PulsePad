@@ -1,6 +1,7 @@
 export interface Note {
     d: number; // duration
     o: number; // offset
+    v?: number; // velocity (0-1)
     oct?: number; // octave shift
     rgb?: string; // CSS color string
     hsl?: { h: number; s: number; l: number }; // split color
@@ -20,7 +21,7 @@ export interface RowConfig {
 
 export interface FXNode {
     id: string;
-    type: 'delay' | 'filter' | 'distortion' | 'reverb' | 'compressor' | 'source' | 'output' | 'float' | 'int' | 'lfo' | 'setRange' | 'mixer' | 'parametricEQ';
+    type: 'delay' | 'filter' | 'distortion' | 'reverb' | 'compressor' | 'source' | 'output' | 'float' | 'int' | 'lfo' | 'setRange' | 'mixer' | 'parametricEQ' | 'fadeIn';
     x: number;
     y: number;
     params: Record<string, number>;
@@ -63,6 +64,7 @@ export interface SongState {
     masterGain: number;
     fxGraph: FXGraph;
     isPerformanceMode: boolean;
+    isBuildMode: boolean;
 }
 
 export interface SoundConfig {

@@ -90,6 +90,34 @@ export class AudioEngine {
         }
     }
 
+    private getCubicBezierCurve(duration: number, cx1: number, cy1: number, cx2: number, cy2: number): Float32Array {
+        const size = Math.floor(this.ctx!.sampleRate * duration);
+        const curve = new Float32Array(Math.max(2, Math.min(size, 4096)));
+        const n = curve.length;
+
+        const getX = (t: number) => 3 * (1 - t) * (1 - t) * t * cx1 + 3 * (1 - t) * t * t * cx2 + t * t * t;
+        const getY = (t: number) => 3 * (1 - t) * (1 - t) * t * cy1 + 3 * (1 - t) * t * t * cy2 + t * t * t;
+
+        for (let i = 0; i < n; i++) {
+            const targetX = i / (n - 1);
+
+            // Binary search for t such that getX(t) ≈ targetX
+            let t = targetX;
+            let low = 0;
+            let high = 1;
+            for (let j = 0; j < 10; j++) {
+                const x = getX(t);
+                if (Math.abs(x - targetX) < 0.001) break;
+                if (x < targetX) low = t;
+                else high = t;
+                t = (low + high) / 2;
+            }
+
+            curve[i] = getY(t);
+        }
+        return curve;
+    }
+
     createKick(time: number, rowGain = 0.8, config?: SoundConfig, trackIdx = 0) {
         if (!this.ctx || !this.trackOutputs[trackIdx]) return;
         const conf = config ? config.kick : this.soundConfig.kick;
@@ -711,6 +739,23 @@ export class AudioEngine {
                         }
                     };
                 }
+                case 'fadeIn': {
+                    const gain = this.ctx.createGain();
+                    const duration = p.duration ?? 2.0;
+                    const cx1 = p.cx1 ?? 0.25;
+                    const cy1 = p.cy1 ?? 0.1;
+                    const cx2 = p.cx2 ?? 0.25;
+                    const cy2 = p.cy2 ?? 1.0;
+
+                    gain.gain.setValueAtTime(0, this.ctx.currentTime);
+                    const curve = this.getCubicBezierCurve(duration, cx1, cy1, cx2, cy2);
+                    gain.gain.setValueCurveAtTime(curve, this.ctx.currentTime, duration);
+
+                    return {
+                        input: gain, output: gain, type: 'fadeIn',
+                        disconnect: () => gain.disconnect()
+                    };
+                }
                 default:
                     return this.ctx.createGain();
             }
@@ -788,6 +833,14 @@ export class AudioEngine {
             if (param === 'midQ') node.mid.Q.setTargetAtTime(value * 10, this.ctx.currentTime, 0.05);
             if (param === 'highFreq') node.high.frequency.setTargetAtTime(value * 10000 + 4000, this.ctx.currentTime, 0.05);
             if (param === 'highGain') node.high.gain.setTargetAtTime(value * 40 - 20, this.ctx.currentTime, 0.05);
+        } else if (node.type === 'fadeIn') {
+            const nData = this.currentFXGraph?.nodes.find(n => n.id === nodeId);
+            if (nData) {
+                const p = nData.params;
+                const curve = this.getCubicBezierCurve(p.duration ?? 2.0, p.cx1 ?? 0.25, p.cy1 ?? 0.1, p.cx2 ?? 0.25, p.cy2 ?? 1.0);
+                node.input.gain.cancelScheduledValues(this.ctx.currentTime);
+                node.input.gain.setValueCurveAtTime(curve, this.ctx.currentTime, p.duration ?? 2.0);
+            }
         }
     }
 }

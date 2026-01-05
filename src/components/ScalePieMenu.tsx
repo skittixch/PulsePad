@@ -54,14 +54,16 @@ export const ScalePieMenu: React.FC<ScalePieMenuProps> = ({ isOpen, mousePos, cu
 
             let angle = Math.atan2(dy, dx) * (180 / Math.PI);
             const segmentIdx = Math.floor(((angle + 105 + 360) % 360) / 30);
-            const note = dist < 60 ? null : CIRCLE_OF_FIFTHS[segmentIdx % 12];
+            const note = dist < 60 ? 'Chromatic' : CIRCLE_OF_FIFTHS[segmentIdx % 12];
 
-            let type = 'Major';
-            if (dist < 100) type = 'Min Pent';
-            else if (dist < 150) type = 'Minor';
-            else type = 'Major';
+            let type = '';
+            if (note !== 'Chromatic') {
+                if (dist < 100) type = 'Min Pent';
+                else if (dist < 150) type = 'Minor';
+                else type = 'Major';
+            }
 
-            const scaleName = note ? `${note} ${type}` : '';
+            const scaleName = note === 'Chromatic' ? 'Chromatic' : (note ? `${note} ${type}` : '');
 
             // Only trigger if scale changes
             if (scaleName && scaleName !== lastMouseState.current.scaleName) {
@@ -83,7 +85,10 @@ export const ScalePieMenu: React.FC<ScalePieMenuProps> = ({ isOpen, mousePos, cu
         };
 
         const handleUp = () => {
-            if (hoveredNote) {
+            if (hoveredNote === 'Chromatic') {
+                onSelectScale('Chromatic');
+                onClose();
+            } else if (hoveredNote) {
                 onSelectScale(`${hoveredNote} ${hoveredType}`);
                 onClose();
             } else {

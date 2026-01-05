@@ -96,7 +96,7 @@ export const getLabelSemitones = (label: string): number => {
 
 export const getRowConfigs = (scaleName: string, unrolled: boolean) => {
     let labels: string[];
-    if (unrolled) {
+    if (unrolled || scaleName === 'Chromatic') {
         labels = CHROMATIC_LABELS;
     } else {
         // Scaled view: Filter SCALES to only include Octave 4
