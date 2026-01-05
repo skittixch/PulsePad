@@ -1257,9 +1257,13 @@ const App: React.FC = () => {
     }));
     setTracks(nextTracks);
 
-    // Always fit sequencer to notes when remapping (avoids getting lost in blank space)
-    const currentPart = nextTracks[editingTrackIndex].parts[editingPatternIndex];
-    fitSequencerToNotes(currentPart.grid, getRowConfigs(currentPart.scale, targetUnrolled));
+    // Scroll Logic: Center for Piano, Reset for Key View
+    if (targetUnrolled) {
+      const currentPart = nextTracks[editingTrackIndex].parts[editingPatternIndex];
+      fitSequencerToNotes(currentPart.grid, getRowConfigs(currentPart.scale, true));
+    } else {
+      setSequencerScrollTop(0);
+    }
   }, [editingTrackIndex, editingPatternIndex, fitSequencerToNotes]);
 
   const handleReset = useCallback(() => {

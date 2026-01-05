@@ -96,12 +96,23 @@ export const getLabelSemitones = (label: string): number => {
 
 export const getRowConfigs = (scaleName: string, unrolled: boolean) => {
     let labels: string[];
-    if (unrolled || scaleName === 'Chromatic') {
+    // Key View: Restrict to Octave 4
+    if (unrolled) {
         labels = CHROMATIC_LABELS;
     } else {
-        // Scaled view: Use full scale labels across all octaves
-        const scale = SCALES[scaleName] || SCALES['C Maj Pent'] || { labels: [] };
-        labels = scale.labels;
+        if (scaleName === 'Chromatic') {
+            // "Chromatic Key View" - Just the 12 notes of Octave 4
+            labels = CHROMATIC_LABELS.filter(l => l.endsWith('4'));
+        } else {
+            // Scaled view: Filter SCALES to only include Octave 4
+            const scale = SCALES[scaleName] || SCALES['C Maj Pent'] || { labels: [] };
+            labels = scale.labels.filter(l => l.endsWith('4'));
+
+            // Safety check: if no Octave 4 notes, just use the first 8 labels from the scale
+            if (labels.length === 0 && scale.labels.length > 0) {
+                labels = scale.labels.slice(0, 8);
+            }
+        }
     }
 
     const synthRows = labels.map((label: string) => ({
