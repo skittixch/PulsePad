@@ -375,7 +375,17 @@ const App: React.FC = () => {
       }
 
       if (e.code === 'Space') {
+        // If typing in an input, let it be
+        if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
         e.preventDefault();
+        e.stopPropagation();
+
+        // Remove focus from any button to prevent "activation"
+        if (document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+
         togglePlayback();
         return;
       }
@@ -563,11 +573,11 @@ const App: React.FC = () => {
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    window.addEventListener('keyup', handleKeyUp, { capture: true });
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('keydown', handleKeyDown, { capture: true });
+      window.removeEventListener('keyup', handleKeyUp, { capture: true });
     };
   }, [user, currentPart.scale, isUnrolled, currentTrack.instrument, showToast]);
 
