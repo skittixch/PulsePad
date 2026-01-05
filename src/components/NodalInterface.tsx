@@ -1494,7 +1494,10 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
             panningPrevented.current = false;
             return;
         }
-        setContextMenu({ x: e.clientX, y: e.clientY });
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (rect) {
+            setContextMenu({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+        }
     };
 
     const addNode = (type: keyof typeof NODE_DEFS) => {
@@ -1827,7 +1830,10 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
                             onContextMenu={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
-                                setNodeContextMenu({ x: e.clientX, y: e.clientY, nodeId: node.id });
+                                const rect = containerRef.current?.getBoundingClientRect();
+                                if (rect) {
+                                    setNodeContextMenu({ x: e.clientX - rect.left, y: e.clientY - rect.top, nodeId: node.id });
+                                }
                             }}
                         >
                             <span>{def.name}</span>
@@ -2089,8 +2095,11 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
             })}
 
             {contextMenu && (
+                <div className="fixed inset-0 z-[200]" onClick={() => setContextMenu(null)} />
+            )}
+            {contextMenu && (
                 <div
-                    className="fixed bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-2 w-48 z-[200] overflow-hidden backdrop-blur-xl"
+                    className="absolute bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-2 w-48 z-[201] overflow-hidden backdrop-blur-xl"
                     style={{ left: contextMenu.x, top: contextMenu.y }}
                     onMouseDown={(e) => e.stopPropagation()}
                 >
@@ -2114,7 +2123,7 @@ export const NodalInterface = React.forwardRef<NodalInterfaceRef, NodalInterface
                 <>
                     <div className="fixed inset-0 z-[200]" onClick={() => setNodeContextMenu(null)} />
                     <div
-                        className="fixed bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-2 w-48 z-[201] overflow-hidden backdrop-blur-xl"
+                        className="absolute bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-2 w-48 z-[201] overflow-hidden backdrop-blur-xl"
                         style={{ left: nodeContextMenu.x, top: nodeContextMenu.y }}
                         onMouseDown={(e) => e.stopPropagation()}
                     >
