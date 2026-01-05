@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { CanvasSequencer } from './components/CanvasSequencer';
 import { ArrangementView } from './components/ArrangementView';
 import { SpreadsheetView } from './components/SpreadsheetView';
+import { VerticalZoomScrollbar } from './components/VerticalZoomScrollbar';
 import { NodalInterface } from './components/NodalInterface';
 import type { NodalInterfaceRef } from './components/NodalInterface';
 import { ScalePieMenu } from './components/ScalePieMenu';
@@ -114,6 +115,7 @@ const App: React.FC = () => {
   const [playbackStep, setPlaybackStep] = useState(0);
   const [playbackPatternIndex, setPlaybackPatternIndex] = useState(0);
   const [sequencerScrollTop, setSequencerScrollTop] = useState(0);
+  const [sequencerRowHeight, setSequencerRowHeight] = useState(40);
   const [queuedPatternIndex, setQueuedPatternIndex] = useState<number>(-1);
   const [isFollowMode, setIsFollowMode] = useState(true);
   const [isBuildMode, setIsBuildMode] = useState(() => {
@@ -1280,13 +1282,26 @@ const App: React.FC = () => {
     setTracks(nextTracks);
 
     // Scroll Logic: Center for Piano, Reset for Key View
+    // Scroll Logic: Center for Piano, Reset for Key View
     if (targetUnrolled) {
-      const currentPart = nextTracks[editingTrackIndex].parts[editingPatternIndex];
-      fitSequencerToNotes(currentPart.grid, getRowConfigs(currentPart.scale, true));
+      // Default to Octave 4 Center
+      // Notes are roughly C0 to B8
+      // C4 is around index 57 (depending on scale).
+      // Chromatic C4 = 48 + 9? No.
+      // Scale length varies. 
+      // Safe bet: Center of the grid? Or calculate C4 offset.
+
+      const configs = getRowConfigs(nextTracks[editingTrackIndex].parts[editingPatternIndex].scale, true);
+      const c4Index = configs.findIndex(c => c.label.includes('C4'));
+      const targetIndex = c4Index > -1 ? c4Index : Math.floor(configs.length / 2);
+
+      const centerScroll = Math.max(0, (targetIndex * 40) - (arrHeight / 2));
+      setSequencerScrollTop(centerScroll);
+      // NOTE: We do NOT call fitSequencerToNotes here anymore to avoid jumping to top note.
     } else {
       setSequencerScrollTop(0);
     }
-  }, [editingTrackIndex, editingPatternIndex, fitSequencerToNotes]);
+  }, [editingTrackIndex, editingPatternIndex, arrHeight]);
 
   const handleReset = useCallback(() => {
     if (!resetArmed) {
@@ -2148,7 +2163,20 @@ const App: React.FC = () => {
                   onSetScrollTop={setSequencerScrollTop}
                   paused={viewMode !== 'sequencer'}
                   isResizing={isResizingArr}
+                  rowHeight={sequencerRowHeight}
                 />
+                {isUnrolled && (
+                  <VerticalZoomScrollbar
+                    totalItems={getRowConfigs(currentPart.scale, true).length}
+                    rowHeight={sequencerRowHeight}
+                    visibleHeight={arrHeight - 80} // Approx header offset, or use ref
+                    scrollTop={sequencerScrollTop}
+                    onScroll={setSequencerScrollTop}
+                    onZoom={setSequencerRowHeight}
+                    minRowHeight={10}
+                    maxRowHeight={120}
+                  />
+                )}
               </div>
 
               <div className={`absolute inset-0 view-transition ${viewMode === 'node' ? 'view-visible' : 'view-hidden'}`}>

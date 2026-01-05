@@ -60,6 +60,7 @@ interface CanvasSequencerProps {
     playheadDistance?: number;
     paused?: boolean;
     isResizing?: boolean;
+    rowHeight?: number; // External row height control
 }
 
 const LABEL_WIDTH = 80;
@@ -155,7 +156,7 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
             const newStepWidth = (width - LABEL_WIDTH) / STEPS_PER_PATTERN;
 
             // 2. Calculate Vertical Row Height
-            let newRowHeight = 40;
+            let newRowHeight = rowHeight || 40;
             if (!isUnrolled) {
                 // Key View: Dynamic height to fill screen (min 32px to ensure readbility)
                 newRowHeight = Math.max(32, Math.floor(height / Math.max(1, rowConfigs.length)));
@@ -178,7 +179,7 @@ export const CanvasSequencer: React.FC<CanvasSequencerProps> = ({
         observer.observe(container);
 
         return () => observer.disconnect();
-    }, [isUnrolled, rowConfigs.length, isResizing]);
+    }, [isUnrolled, rowConfigs.length, isResizing, rowHeight]);
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
