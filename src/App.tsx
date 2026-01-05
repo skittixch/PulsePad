@@ -685,7 +685,12 @@ const App: React.FC = () => {
     const nextBuildMode = newBuildMode !== undefined ? newBuildMode : isBuildMode;
     const nextPerfMode = newPerfMode !== undefined ? newPerfMode : isPerformanceMode;
 
-    setHistory(prev => [...prev.slice(-19), { tracks: tracks, fxGraph: lastCommittedGraph, bpm: bpm, loops: trackLoops }]);
+    // Limit history stack to 30 items to save memory
+    setHistory(prev => {
+      const next = [...prev, { tracks: tracks, fxGraph: lastCommittedGraph, bpm: bpm, loops: trackLoops }];
+      if (next.length > 30) return next.slice(next.length - 30);
+      return next;
+    });
     setRedoStack([]);
 
     if (newTracks) setTracks(newTracks);
