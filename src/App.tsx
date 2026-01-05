@@ -1257,10 +1257,9 @@ const App: React.FC = () => {
     }));
     setTracks(nextTracks);
 
-    if (targetUnrolled) {
-      const currentPart = nextTracks[editingTrackIndex].parts[editingPatternIndex];
-      fitSequencerToNotes(currentPart.grid, getRowConfigs(currentPart.scale, true));
-    }
+    // Always fit sequencer to notes when remapping (avoids getting lost in blank space)
+    const currentPart = nextTracks[editingTrackIndex].parts[editingPatternIndex];
+    fitSequencerToNotes(currentPart.grid, getRowConfigs(currentPart.scale, targetUnrolled));
   }, [editingTrackIndex, editingPatternIndex, fitSequencerToNotes]);
 
   const handleReset = useCallback(() => {
@@ -1988,7 +1987,6 @@ const App: React.FC = () => {
 
                 remapSongLayout(target, isUnrolled, nextTracks);
                 setIsUnrolled(target);
-                setSequencerScrollTop(0);
               }}
               className={`px-2 py-0.5 rounded border transition-all text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 ${isUnrolled ? 'bg-sky-500 border-sky-400 text-white' : 'text-slate-500 border-slate-700 hover:text-white'}`}
               title="Unroll Piano"

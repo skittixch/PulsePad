@@ -99,14 +99,9 @@ export const getRowConfigs = (scaleName: string, unrolled: boolean) => {
     if (unrolled || scaleName === 'Chromatic') {
         labels = CHROMATIC_LABELS;
     } else {
-        // Scaled view: Filter SCALES to only include Octave 4
+        // Scaled view: Use full scale labels across all octaves
         const scale = SCALES[scaleName] || SCALES['C Maj Pent'] || { labels: [] };
-        labels = scale.labels.filter(l => l.endsWith('4'));
-
-        // Safety check: if no Octave 4 notes, just use the first 8 labels from the scale
-        if (labels.length === 0 && scale.labels.length > 0) {
-            labels = scale.labels.slice(0, 8);
-        }
+        labels = scale.labels;
     }
 
     const synthRows = labels.map((label: string) => ({
