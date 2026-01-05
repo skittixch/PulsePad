@@ -1,4 +1,5 @@
-# 🎚️ PulsePad: A music design toolkit, vibecoded as an exercise in UX exploration, and an "I wonder what else I can do" attitude.
+# 🎚️ PulsePad: 
+> A music design toolkit, vibecoded as an exercise in UX exploration, and an "I wonder what else I can do" attitude.
 
 ![PulsePad Banner](public/screenshots/arrangement.png)
 
