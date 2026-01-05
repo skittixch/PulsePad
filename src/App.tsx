@@ -373,6 +373,12 @@ const App: React.FC = () => {
         return;
       }
 
+      if (e.code === 'Space') {
+        e.preventDefault();
+        togglePlayback();
+        return;
+      }
+
       // Toggle Piano Mode based on CapsLock
       const capsOn = e.getModifierState('CapsLock');
       setIsPianoMode(capsOn);
