@@ -45,7 +45,9 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
     queuedPatternIndex,
     trackLoops,
     onSelectPattern,
+    onInsertPattern,
     onDeletePattern,
+    onDuplicatePattern,
     onQueuePattern,
     onTrackLoopChange,
     onMovePattern,
@@ -475,6 +477,34 @@ export const ArrangementView: React.FC<ArrangementViewProps> = ({
                                 );
                             })}
 
+                            {/* Action Buttons (New / Duplicate) */}
+                            <div className="flex items-center gap-1.5 ml-2 mr-4 group/row shrink-0">
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onInsertPattern(tIdx, track.parts.length);
+                                    }}
+                                    className="w-10 h-10 rounded-xl bg-slate-800/40 border border-slate-700/50 flex flex-col items-center justify-center gap-0.5 text-slate-500 hover:text-sky-400 hover:border-sky-500/50 hover:bg-sky-500/5 transition-all group/btn"
+                                    title="Add New Pattern"
+                                >
+                                    <span className="text-sm font-black leading-none">+</span>
+                                    <span className="text-[6px] font-black tracking-widest leading-none">NEW</span>
+                                </button>
+
+                                {track.parts.length > 0 && (
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            onDuplicatePattern(tIdx, track.parts.length - 1);
+                                        }}
+                                        className="w-10 h-10 rounded-xl bg-slate-800/40 border border-slate-700/50 flex flex-col items-center justify-center gap-0.5 text-slate-500 hover:text-emerald-400 hover:border-emerald-500/50 hover:bg-emerald-500/5 transition-all"
+                                        title="Copy Last Pattern"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+                                        <span className="text-[6px] font-black tracking-widest leading-none">COPY</span>
+                                    </button>
+                                )}
+                            </div>
                         </div>
                     </div>
                 ))}

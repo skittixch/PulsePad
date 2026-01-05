@@ -23,11 +23,30 @@ export const VerticalZoomScrollbar: React.FC<VerticalZoomScrollbarProps> = ({
 }) => {
     const trackRef = useRef<HTMLDivElement>(null);
     const [isDragging, setIsDragging] = useState<'thumb' | 'top' | 'bottom' | null>(null);
-    const dragStartY = useRef(0);
-    const startScrollTop = useRef(0);
+
+    // Use refs for values needed in mousemove to avoid effect re-attachment jitter
+    const stateRef = useRef({
+        dragStartY: 0,
+        startScrollTop: 0,
+        rowHeight,
+        scrollTop,
+        totalItems,
+        visibleHeight
+    });
+
+    useEffect(() => {
+        stateRef.current = {
+            dragStartY: stateRef.current.dragStartY,
+            startScrollTop: stateRef.current.startScrollTop,
+            rowHeight,
+            scrollTop,
+            totalItems,
+            visibleHeight
+        };
+    }, [rowHeight, scrollTop, totalItems, visibleHeight]);
 
     const totalHeight = totalItems * rowHeight;
-    const thumbHeight = Math.max(20, (visibleHeight / totalHeight) * visibleHeight || 0);
+    const thumbHeight = Math.max(24, (visibleHeight / totalHeight) * visibleHeight || 0);
 
     const maxScroll = Math.max(0, totalHeight - visibleHeight);
     const scrollRatio = maxScroll > 0 ? scrollTop / maxScroll : 0;
@@ -38,39 +57,45 @@ export const VerticalZoomScrollbar: React.FC<VerticalZoomScrollbarProps> = ({
         e.preventDefault();
         e.stopPropagation();
         setIsDragging(type);
-        dragStartY.current = e.clientY;
-        startScrollTop.current = scrollTop;
+        stateRef.current.dragStartY = e.clientY;
+        stateRef.current.startScrollTop = scrollTop;
     };
 
     useEffect(() => {
         if (!isDragging) return;
 
         const handleMouseMove = (e: MouseEvent) => {
-            const deltaY = e.clientY - dragStartY.current;
+            const { dragStartY, startScrollTop, rowHeight: curRowH, totalItems: curTotal, visibleHeight: curVisH } = stateRef.current;
+            const deltaY = e.clientY - dragStartY;
+
+            const curTotalH = curTotal * curRowH;
+            const curMaxScroll = Math.max(0, curTotalH - curVisH);
+            const curThumbH = Math.max(24, (curVisH / curTotalH) * curVisH || 0);
+            const curTrackRange = curVisH - curThumbH;
 
             if (isDragging === 'thumb') {
-                const deltaRatio = deltaY / trackRange;
-                const deltaScroll = deltaRatio * maxScroll;
-                const newScroll = Math.max(0, Math.min(maxScroll, startScrollTop.current + deltaScroll));
+                const deltaRatio = deltaY / curTrackRange;
+                const deltaScroll = deltaRatio * curMaxScroll;
+                const newScroll = Math.max(0, Math.min(curMaxScroll, startScrollTop + deltaScroll));
                 onScroll(newScroll);
             } else if (isDragging === 'top') {
+                const scrollRatio = curMaxScroll > 0 ? startScrollTop / curMaxScroll : 0;
+                const thumbTop = scrollRatio * curTrackRange;
+
                 const newThumbTop = Math.max(0, thumbTop + deltaY);
-                const currentThumbBottom = thumbTop + thumbHeight;
-                const newThumbHeight = currentThumbBottom - newThumbTop;
+                const currentThumbBottom = thumbTop + curThumbH;
+                const newThumbHeight = Math.max(24, currentThumbBottom - newThumbTop);
 
-                if (newThumbHeight < 20) return;
+                const newTotalHeight = (curVisH * curVisH) / newThumbHeight;
+                const newRowHeight = newTotalHeight / curTotal;
 
-                const newTotalHeight = (visibleHeight * visibleHeight) / newThumbHeight;
-                const newRowHeight = newTotalHeight / totalItems;
-
-                const clampedRow = Math.max(minRowHeight, Math.min(maxRowHeight, newRowHeight));
-                onZoom(clampedRow);
+                onZoom(Math.max(minRowHeight, Math.min(maxRowHeight, newRowHeight)));
             } else if (isDragging === 'bottom') {
-                const newThumbHeight = Math.max(20, thumbHeight + deltaY);
-                const newTotalHeight = (visibleHeight * visibleHeight) / newThumbHeight;
-                const newRowHeight = newTotalHeight / totalItems;
-                const clampedRow = Math.max(minRowHeight, Math.min(maxRowHeight, newRowHeight));
-                onZoom(clampedRow);
+                const newThumbHeight = Math.max(24, curThumbH + deltaY);
+
+                const newTotalHeight = (curVisH * curVisH) / newThumbHeight;
+                const newRowHeight = newTotalHeight / curTotal;
+                onZoom(Math.max(minRowHeight, Math.min(maxRowHeight, newRowHeight)));
             }
         };
 
@@ -84,33 +109,40 @@ export const VerticalZoomScrollbar: React.FC<VerticalZoomScrollbarProps> = ({
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('mouseup', handleMouseUp);
         };
-    }, [isDragging, maxScroll, trackRange, startScrollTop, rowHeight, thumbTop, thumbHeight, visibleHeight, totalItems, onScroll, onZoom, minRowHeight, maxRowHeight]);
+    }, [isDragging, onScroll, onZoom, minRowHeight, maxRowHeight]);
 
     return (
-        <div ref={trackRef} className="absolute right-0 top-0 bottom-0 w-4 bg-slate-900 border-l border-slate-700 select-none z-20">
+        <div
+            ref={trackRef}
+            className="absolute right-0 top-0 bottom-0 w-6 bg-slate-900/80 border-l border-white/5 select-none z-50 flex justify-center"
+            onMouseDown={e => e.stopPropagation()}
+        >
             <div
-                className="absolute bg-slate-600 rounded-sm w-3 left-0.5 hover:bg-slate-500 active:bg-slate-400 group cursor-grab active:cursor-grabbing"
+                className="absolute bg-slate-700 rounded-full w-2.5 hover:bg-slate-500 active:bg-sky-500 transition-colors cursor-grab active:cursor-grabbing group shadow-lg"
                 style={{ top: thumbTop, height: thumbHeight }}
                 onMouseDown={(e) => handleMouseDown(e, 'thumb')}
             >
-                {/* Top Handle */}
+                {/* Top Handle - Invisible hit area but visible on hover */}
                 <div
-                    className="absolute top-0 left-0 right-0 h-2 bg-slate-400 opacity-0 group-hover:opacity-100 cursor-ns-resize rounded-t-sm"
+                    className="absolute -top-1 left-0 right-0 h-4 cursor-ns-resize z-10 flex items-start justify-center"
                     onMouseDown={(e) => handleMouseDown(e, 'top')}
-                />
+                >
+                    <div className="w-4 h-1 bg-white/20 rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
 
-                {/* Grip Lines */}
-                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col gap-0.5">
-                    <div className="w-2 h-px bg-slate-800/50"></div>
-                    <div className="w-2 h-px bg-slate-800/50"></div>
-                    <div className="w-2 h-px bg-slate-800/50"></div>
+                {/* Visual Grips */}
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col gap-1 opacity-50">
+                    <div className="w-1.5 h-1.5 rounded-full bg-white"></div>
+                    <div className="w-1.5 h-1.5 rounded-full bg-white"></div>
                 </div>
 
                 {/* Bottom Handle */}
                 <div
-                    className="absolute bottom-0 left-0 right-0 h-2 bg-slate-400 opacity-0 group-hover:opacity-100 cursor-ns-resize rounded-b-sm"
+                    className="absolute -bottom-1 left-0 right-0 h-4 cursor-ns-resize z-10 flex items-end justify-center"
                     onMouseDown={(e) => handleMouseDown(e, 'bottom')}
-                />
+                >
+                    <div className="w-4 h-1 bg-white/20 rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
             </div>
         </div>
     );

@@ -2026,6 +2026,46 @@ const App: React.FC = () => {
                   } catch (e) { console.error("Auto-scale error", e); }
                 }
 
+                if (target) {
+                  // Piano View Entry Framing
+                  const visiblePx = arrHeight - 80;
+                  const configs = getRowConfigs(nextTracks[editingTrackIndex].parts[editingPatternIndex].scale, true);
+
+                  // Scan for note range
+                  const currentGrid = nextTracks[editingTrackIndex].parts[editingPatternIndex].grid;
+                  let minR = Infinity;
+                  let maxR = -Infinity;
+                  currentGrid.forEach((row, r) => {
+                    if (row.some(n => n)) {
+                      if (r < minR) minR = r;
+                      if (r > maxR) maxR = r;
+                    }
+                  });
+
+                  let targetRowH = 40;
+                  let targetScroll = 0;
+
+                  if (minR !== Infinity) {
+                    // Frame the notes with some padding (approx 1 octave = 12 notes)
+                    const range = maxR - minR + 1;
+                    const paddedRange = Math.max(36, range + 12); // Minimum 3 octaves
+                    targetRowH = Math.max(12, Math.min(48, visiblePx / paddedRange));
+
+                    const centerR = (minR + maxR) / 2;
+                    targetScroll = Math.max(0, (centerR * targetRowH) - (visiblePx / 2));
+                  } else {
+                    // Default to Oct 3-5 cluster (center C4)
+                    const targetRows = 42;
+                    targetRowH = Math.max(12, Math.min(48, visiblePx / targetRows));
+                    const c4Index = configs.findIndex(c => c.label === 'C4');
+                    const centerIndex = c4Index > -1 ? c4Index : Math.floor(configs.length / 2);
+                    targetScroll = Math.max(0, (centerIndex * targetRowH) - (visiblePx / 2));
+                  }
+
+                  setSequencerRowHeight(targetRowH);
+                  setSequencerScrollTop(targetScroll);
+                }
+
                 remapSongLayout(target, isUnrolled, nextTracks);
                 setIsUnrolled(target);
               }}
@@ -2097,7 +2137,17 @@ const App: React.FC = () => {
                 )}
               </h3>
             </div>
-            <div className="flex-1 min-h-0 bg-slate-900 overflow-hidden relative">
+            <div
+              className="flex-1 min-h-0 bg-slate-900 overflow-hidden relative"
+              onWheel={(e) => {
+                if (!isUnrolled) return;
+                setSequencerScrollTop(prev => {
+                  const configs = getRowConfigs(currentPart.scale, true);
+                  const maxScroll = Math.max(0, (configs.length * sequencerRowHeight) - (arrHeight - 80));
+                  return Math.max(0, Math.min(maxScroll, prev + e.deltaY));
+                });
+              }}
+            >
               <div className={`absolute inset-0 view-transition ${viewMode === 'sequencer' ? 'view-visible' : 'view-hidden'}`}>
                 <CanvasSequencer
                   grid={currentPart.grid}
